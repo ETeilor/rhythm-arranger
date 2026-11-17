@@ -286,7 +286,7 @@ Rhythm tihai(int U, int p, bool* exact) {
                 out[(size_t)idx] = std::max<uint8_t>(out[(size_t)idx], 2);
             }
     out[0] = 3;
-    r = fromPattern("Тихай " + std::to_string(U) + "/" + std::to_string(p), "Tihai " + std::to_string(U) + "-" + std::to_string(p), 120, out);
+    r = fromPattern("Финал " + std::to_string(U) + "/" + std::to_string(p), "Finale " + std::to_string(U) + "-" + std::to_string(p), 120, out);
     r.info = "Фраза " + std::to_string(p) + " шагов трижды с паузой " + std::to_string(g) +
              "; последний удар третьей фразы приходится на первую долю следующего цикла (3p+2g=U+1)";
     return r;
