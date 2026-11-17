@@ -16,6 +16,8 @@ private:
     juce::TooltipWindow tooltips{this, 600};
     juce::TextButton play;
     juce::Slider tempo, bars;
+    juce::ToggleButton hostTempo;
+    std::unique_ptr<juce::ButtonParameterAttachment> hostTempoAtt;
     juce::Label tempoLabel, barsLabel;
     std::unique_ptr<juce::SliderParameterAttachment> tempoAtt, barsAtt;
     Card cardMix, cardLayers;

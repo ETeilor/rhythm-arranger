@@ -42,7 +42,7 @@ void RhythmProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::MidiBuff
         auto lp = loop();
         if (lp && lp->cycleTicks > 0) {
             if (restart_.exchange(false)) tick_ = 0;
-            const double bpm = hostBpm(params.getRawParameterValue("tempo")->load());
+            const double bpm = effectiveBpm();
             const double ticksPerSample = bpm * rhy::kTpb / (60.0 * sampleRate_);
             const double t0 = tick_, t1 = tick_ + ticksPerSample * n;
             const long long c0 = (long long)std::floor(t0 / lp->cycleTicks), c1 = (long long)std::floor(t1 / lp->cycleTicks);

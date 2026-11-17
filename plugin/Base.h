@@ -35,7 +35,13 @@ public:
 
     // audio thread
     std::shared_ptr<const Loop> loop() const { return std::atomic_load(&loop_); }
-    double hostBpm(double fallback) const { const double b = hostBpm_.load(); return b > 20 ? b : fallback; }
+    // the tempo everything runs at: the project tempo when "project tempo" is on and the host gives one, else the slider
+    double effectiveBpm() const {
+        const double slider = params.getRawParameterValue("tempo")->load();
+        if (params.getRawParameterValue("hostTempo")->load() < 0.5f) return slider;
+        const double b = hostBpm_.load();
+        return b > 20 ? b : slider;
+    }
 
     void getStateInformation(juce::MemoryBlock&) override;
     void setStateInformation(const void*, int) override;

@@ -41,6 +41,7 @@ void RhythmBase::addRhythmParameters(APVTS::ParameterLayout& l) {
     integer("phase", "Phase copy", 0, 16, 0);
     integer("swing", "Swing", 0, 50, 0);
     integer("tempo", "Tempo", 40, 240, 100);
+    flag("hostTempo", "Project tempo", true);
 }
 
 RhythmBase::RhythmBase(const BusesProperties& buses, APVTS::ParameterLayout layout)
@@ -121,7 +122,7 @@ juce::File RhythmBase::writeRhythmFile(int bars, bool separateTracks) const {
     rhy::MidiOptions o;
     o.bars = bars;
     o.separateTracks = separateTracks;
-    o.bpm = hostBpm(params.getRawParameterValue("tempo")->load());
+    o.bpm = effectiveBpm();
     o.swing = (int)std::lround(params.getRawParameterValue("swing")->load());
     juce::String name = juce::String(rhythm_.midiName) + (separateTracks ? " layers" : "");
     name = name.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_");

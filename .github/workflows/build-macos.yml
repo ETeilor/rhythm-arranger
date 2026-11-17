@@ -30,7 +30,7 @@ jobs:
           auval -v aumi RtLv Tlrm
 
       - name: Installer (.pkg and .dmg)
-        run: bash scripts/make_installer.sh 0.1.1
+        run: bash scripts/make_installer.sh 0.1.2
 
       - name: Install the package the way a user does and validate the installed AU
         run: |

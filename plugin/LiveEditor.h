@@ -16,7 +16,8 @@ private:
     juce::TooltipWindow tooltips{this, 600};
     juce::ComboBox mode;
     std::unique_ptr<juce::ComboBoxParameterAttachment> modeAtt;
-    juce::ToggleButton latch;
+    juce::ToggleButton latch, hostTempo;
+    std::unique_ptr<juce::ButtonParameterAttachment> hostTempoAtt;
     std::unique_ptr<juce::ButtonParameterAttachment> latchAtt;
     juce::TextButton rec, clear;
     juce::Slider tempo;

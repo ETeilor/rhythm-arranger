@@ -127,12 +127,12 @@ int main() {
         expect(pm57.length == 35, "полиметр 5 и 7: точка совпадения 35");
         bool exact = false;
         auto th = tihai(16, 5, &exact);
-        expect(exact && th.ok(), "финал 16/5 точный");
+        expect(exact && th.ok(), "тихай 16/5 точный");
         // three phrases of five steps with a gap of one: 5+1+5+1+5 = 17 = 16 + 1
-        expect(th.layers[0][0] == 3 && onsets(th.layers[0]) == "0,2,4,6,8,10,12,14", "финал: фразы с шагом p+g, последний удар на первой доле");
-        expect(!tihai(8, 5).ok(), "финал: слишком длинная фраза");
+        expect(th.layers[0][0] == 3 && onsets(th.layers[0]) == "0,2,4,6,8,10,12,14", "тихай: фразы с шагом p+g, последний удар на первой доле");
+        expect(!tihai(8, 5).ok(), "тихай: слишком длинная фраза");
         tihai(16, 4, &exact);
-        expect(!exact, "финал 16/4 не точный (нечётный остаток)");
+        expect(!exact, "тихай 16/4 не точный (нечётный остаток)");
     }
     // 6. transformations through build()
     {

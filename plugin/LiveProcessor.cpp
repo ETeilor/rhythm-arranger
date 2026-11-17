@@ -56,8 +56,9 @@ void RhythmLiveProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::Midi
     juce::AudioPlayHead::PositionInfo info;
     bool have = false;
     readHost(info, have);
-    const bool playing = have && info.getIsPlaying();
-    const double bpm = hostBpm(params.getRawParameterValue("tempo")->load());
+    // with "project tempo" off the plug-in runs on its own clock and slider tempo even while the project plays
+    const bool playing = have && info.getIsPlaying() && params.getRawParameterValue("hostTempo")->load() > 0.5f;
+    const double bpm = effectiveBpm();
     const double tps = bpm * rhy::kTpb / (60.0 * sampleRate_);        // ticks per sample
     double t0 = freeTicks_;
     if (playing) { if (auto ppq = info.getPpqPosition()) t0 = *ppq * rhy::kTpb; }

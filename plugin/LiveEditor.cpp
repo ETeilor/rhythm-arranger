@@ -28,10 +28,14 @@ RhythmLiveEditor::RhythmLiveEditor(RhythmLiveProcessor& p) : AudioProcessorEdito
     tempo.setSliderStyle(juce::Slider::LinearHorizontal);
     tempo.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 22);
     tempo.setNumDecimalPlacesToDisplay(0);
-    tempo.setTooltip(U("Темп, когда проект не играет. Когда проект играет, берётся его темп и такт."));
+    tempo.setTooltip(U("Темп, когда выключен «Темп проекта» или хост его не сообщает."));
     tempoAtt = std::make_unique<juce::SliderParameterAttachment>(*proc.params.getParameter("tempo"), tempo);
     addAndMakeVisible(tempo);
     addAndMakeVisible(tempoLabel);
+    hostTempo.setButtonText(U("Темп проекта"));
+    hostTempo.setTooltip(U("Включено: темп и такт берутся из проекта. Выключено: темп из ползунка."));
+    hostTempoAtt = std::make_unique<juce::ButtonParameterAttachment>(*proc.params.getParameter("hostTempo"), hostTempo);
+    addAndMakeVisible(hostTempo);
 
     rec.setButtonText(U("Запись"));
     rec.getProperties().set("icon", "rec");
@@ -67,6 +71,7 @@ void RhythmLiveEditor::timerCallback() {
     for (int n : c) s += (s.isEmpty() ? "" : "  ") + noteNameLive(n);
     chordLabel.setText(s.isEmpty() ? U("Аккорд не зажат") : s, juce::dontSendNotification);
     chordLabel.setColour(juce::Label::textColourId, s.isEmpty() ? ui::textDim : ui::accent);
+    tempo.setEnabled(proc.params.getRawParameterValue("hostTempo")->load() < 0.5f);
     take.subtitle = proc.recordedNotes() ? U("нот: ") + juce::String(proc.recordedNotes()) : U("пока пусто");
     take.repaint();
 }
@@ -97,7 +102,7 @@ void RhythmLiveEditor::resized() {
     latch.setBounds(left.removeFromTop(26));
     left.removeFromTop(6);
     auto r1 = left.removeFromTop(28);
-    tempoLabel.setBounds(r1.removeFromLeft(70)); tempo.setBounds(r1);
+    tempoLabel.setBounds(r1.removeFromLeft(70)); hostTempo.setBounds(r1.removeFromRight(130)); tempo.setBounds(r1);
     bottom.removeFromLeft(24);
     auto mid = bottom.removeFromLeft(300);
     chordLabel.setBounds(mid.removeFromTop(28));

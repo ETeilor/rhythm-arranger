@@ -9,7 +9,7 @@ RhythmEditor::RhythmEditor(RhythmProcessor& p)
 
     play.setButtonText(U("Слушать"));
     play.getProperties().set("icon", "play");
-    play.setTooltip(U("Прослушать ритм обычным кликом. Темп берётся из проекта, а если проект не играет, из ползунка."));
+    play.setTooltip(U("Прослушать ритм обычным кликом. Темп берётся из проекта, если включён «Темп проекта», иначе из ползунка."));
     play.onClick = [this]() {
         const bool on = !proc.isPreviewing();
         proc.setPreview(on);
@@ -31,7 +31,11 @@ RhythmEditor::RhythmEditor(RhythmProcessor& p)
         addAndMakeVisible(l);
     };
     setup(tempo, tempoLabel, "Темп", "tempo", tempoAtt);
-    tempo.setTooltip(U("Темп прослушивания, когда проект не играет"));
+    tempo.setTooltip(U("Темп прослушивания, когда выключен «Темп проекта» или хост его не сообщает"));
+    hostTempo.setButtonText(U("Темп проекта"));
+    hostTempo.setTooltip(U("Включено: темп берётся из проекта. Выключено: темп из ползунка."));
+    hostTempoAtt = std::make_unique<juce::ButtonParameterAttachment>(*proc.params.getParameter("hostTempo"), hostTempo);
+    addAndMakeVisible(hostTempo);
     setup(bars, barsLabel, "Тактов в файле", "bars", barsAtt);
     bars.setTooltip(U("Сколько раз цикл повторяется в перетаскиваемом файле"));
 
@@ -57,6 +61,7 @@ void RhythmEditor::timerCallback() {
     const int bars_ = (int)std::lround(proc.params.getRawParameterValue("bars")->load());
     cardMix.subtitle = r.ok() ? U("тактов: ") + juce::String(bars_) + U(", слоёв: ") + juce::String((int)r.layers.size()) : juce::String();
     cardLayers.subtitle = r.ok() ? U("дорожек: ") + juce::String((int)r.layers.size()) + U(", везде C3") : juce::String();
+    tempo.setEnabled(proc.params.getRawParameterValue("hostTempo")->load() < 0.5f);
     cardMix.repaint();
     cardLayers.repaint();
 }
@@ -84,7 +89,7 @@ void RhythmEditor::resized() {
     play.setBounds(left.removeFromTop(40).removeFromLeft(140));
     left.removeFromTop(10);
     auto r1 = left.removeFromTop(28);
-    tempoLabel.setBounds(r1.removeFromLeft(110)); tempo.setBounds(r1);
+    tempoLabel.setBounds(r1.removeFromLeft(110)); hostTempo.setBounds(r1.removeFromRight(130)); tempo.setBounds(r1);
     left.removeFromTop(4);
     auto r2 = left.removeFromTop(28);
     barsLabel.setBounds(r2.removeFromLeft(110)); bars.setBounds(r2);

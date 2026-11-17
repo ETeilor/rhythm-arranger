@@ -125,6 +125,19 @@ int main(int argc, char** argv) {
         expect(peak > 0.1f && peak <= 1.0f, "клик слышен и не перегружает, пик " + juce::String(peak, 2));
         // E(4,16) at 120 bpm: four hits every two seconds
         expect(onsets >= 7 && onsets <= 9, "четыре секунды при 120 bpm дают восемь ударов, найдено " + juce::String(onsets));
+        // "project tempo" off: the slider rules, 60 bpm gives half the hits
+        set(p.params, "hostTempo", 0); set(p.params, "tempo", 60);
+        p.setPreview(false); p.setPreview(true);
+        int slow = 0; env = 0; armed = true;
+        for (int i = 0; i < blocks; ++i) {
+            buf.clear(); p.processBlock(buf, mb);
+            auto* d = buf.getReadPointer(0);
+            for (int s = 0; s < 512; ++s) { env = std::max(std::abs(d[s]), env * 0.998f); if (armed && env > 0.05f) { ++slow; armed = false; } if (!armed && env < 0.005f) armed = true; }
+        }
+        expect(slow >= 3 && slow <= 5, "темп проекта выключен: ползунок 60 bpm даёт четыре удара за четыре секунды, найдено " + juce::String(slow));
+        expect(std::abs(p.effectiveBpm() - 60) < 0.01, "effectiveBpm берёт ползунок");
+        set(p.params, "hostTempo", 1);
+        expect(std::abs(p.effectiveBpm() - 120) < 0.01, "темп проекта включён: effectiveBpm берёт темп хоста");
         p.setPreview(false);
         for (int i = 0; i < 30; ++i) { buf.clear(); p.processBlock(buf, mb); }
         expect(buf.getMagnitude(0, 512) == 0.0f, "после стопа тишина");
