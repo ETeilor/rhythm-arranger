@@ -281,6 +281,14 @@ int main() {
         expect(off + on == (int)evs.size(), "свинг 30% сдвигает нечётные шаги на 36 тиков");
         expect(cycleEvents(sr, 0)[0].length == kStaccato, "длина ноты всегда 60 тиков");
     }
+    // 8b. a note list written as a file reads back unchanged
+    {
+        std::vector<SourceNote> in{{0, 60, 100}, {240, 64, 80}, {480, 60, 112}}, out;
+        auto bytes = writeNotes(in, 3, 4, 90, "Rhythm Arranger Live take");
+        int num, den; double bpm;
+        bool ok = readMidi(bytes.data(), bytes.size(), out, num, den, bpm);
+        expect(ok && out.size() == 3 && out[1].tick == 240 && out[1].note == 64 && out[2].velocity == 112 && num == 3 && den == 4 && std::abs(bpm - 90) < 0.01, "запись Live читается обратно");
+    }
     // 9. arpeggiator
     {
         std::vector<int> chord{48, 55, 64, 72};

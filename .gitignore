@@ -2,3 +2,4 @@ build*/
 shots/
 .DS_Store
 build_core/
+build_plug/

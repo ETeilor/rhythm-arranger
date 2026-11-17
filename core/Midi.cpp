@@ -148,6 +148,30 @@ bool readMidi(const unsigned char* d, size_t size, std::vector<SourceNote>& note
     return true;
 }
 
+std::vector<unsigned char> writeNotes(const std::vector<SourceNote>& notes, int num, int den, double bpm, const std::string& name) {
+    std::vector<unsigned char> f;
+    f.insert(f.end(), {'M', 'T', 'h', 'd'});
+    put32(f, 6); put16(f, 1); put16(f, 2); put16(f, (unsigned)kTpb);
+    std::vector<unsigned char> c;
+    putName(c, name);
+    const unsigned mpq = (unsigned)std::lround(60000000.0 / std::max(20.0, std::min(bpm, 400.0)));
+    c.insert(c.end(), {0x00, 0xFF, 0x51, 0x03, (unsigned char)(mpq >> 16), (unsigned char)(mpq >> 8), (unsigned char)mpq});
+    int dd = 0;
+    for (int d = den; d > 1; d >>= 1) ++dd;
+    c.insert(c.end(), {0x00, 0xFF, 0x58, 0x04, (unsigned char)std::max(1, num), (unsigned char)dd, 24, 8});
+    c.insert(c.end(), {0x00, 0xFF, 0x2F, 0x00});
+    putTrack(f, c);
+    std::vector<Raw> ev;
+    long long end = 0;
+    for (const auto& n : notes) {
+        ev.push_back({n.tick, 1, n.note, std::max(1, std::min(127, n.velocity))});
+        ev.push_back({(long long)n.tick + kStaccato, 0, n.note, 0});
+        end = std::max(end, (long long)n.tick + kStaccato);
+    }
+    putTrack(f, noteTrack(name, ev, end));
+    return f;
+}
+
 Rhythm rhythmFromNotes(const std::vector<SourceNote>& notes, int num, int den, const std::string& name) {
     Rhythm r;
     const long long bar = (long long)num * 4 * kTpb / std::max(1, den);

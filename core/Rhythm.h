@@ -132,6 +132,8 @@ struct MidiOptions {
 std::vector<unsigned char> writeMidi(const Rhythm& r, const MidiOptions& o);
 struct SourceNote { int tick, note, velocity; };
 bool readMidi(const unsigned char* data, size_t size, std::vector<SourceNote>& notes, int& num, int& den, double& bpm);
+// a plain note list as a file, channel 1, every note staccato (used for the recording of the Live plug-in)
+std::vector<unsigned char> writeNotes(const std::vector<SourceNote>& notes, int num, int den, double bpm, const std::string& name);
 Rhythm rhythmFromNotes(const std::vector<SourceNote>& notes, int num, int den, const std::string& name);
 
 // ---------- live arpeggiator
