@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
             int after2 = 0; for (auto& [t, m] : r2.out) if (m.isNoteOn() && t > 48000 + 512) ++after2;
             expect(after2 > 0, "фиксация: аккорд играет после отпускания");
         }
-        // legato: a new key while the old one is held replaces the chord
+        // a key pressed while another is held joins the chord (it used to replace it, which looked like "only the last note")
         {
             RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
             FakeHead head; head.playing = true; head.ppq = 0.25; p.setPlayHead(&head);
@@ -238,7 +238,118 @@ int main(int argc, char** argv) {
             std::vector<std::pair<long long, juce::MidiMessage>> in{{0, juce::MidiMessage::noteOn(1, C, (juce::uint8)100)}, {24000, juce::MidiMessage::noteOn(1, G, (juce::uint8)100)}};
             LiveRun r; runLive(p, head, r, 150, sr, in);
             int cLate = 0; for (auto& [t, m] : r.out) if (m.isNoteOn() && m.getNoteNumber() == C && t > 24000 + 600) ++cLate;
-            expect(cLate == 0 && countOn(r, G) > 0, "легато: новая нота при зажатой старой заменяет аккорд");
+            expect(cLate > 0 && countOn(r, G) > 0 && p.chord() == std::vector<int>({C, G}), "нота, нажатая при зажатой другой, дополняет аккорд");
+        }
+        // legato: the old key is released after the new one is pressed, only the new one stays
+        {
+            RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
+            FakeHead head; head.playing = true; head.ppq = 0.25; p.setPlayHead(&head);
+            set(p.params, "source", 1); set(p.params, "euclidK", 8); set(p.params, "euclidN", 16); set(p.params, "mode", 0);
+            p.rebuild();
+            std::vector<std::pair<long long, juce::MidiMessage>> in{{0, juce::MidiMessage::noteOn(1, C, (juce::uint8)100)}, {24000, juce::MidiMessage::noteOn(1, G, (juce::uint8)100)},
+                                                                     {24100, juce::MidiMessage::noteOff(1, C)}};
+            LiveRun r; runLive(p, head, r, 150, sr, in);
+            int cLate = 0; for (auto& [t, m] : r.out) if (m.isNoteOn() && m.getNoteNumber() == C && t > 24100 + 600) ++cLate;
+            expect(cLate == 0 && countOn(r, G) > 0, "легато: старая клавиша отпущена, играет только новая");
+        }
+        // the chord window: keys within 40 ms land on the same first hit
+        {
+            RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
+            FakeHead head; head.playing = true; head.ppq = 0.25; p.setPlayHead(&head);
+            set(p.params, "source", 1); set(p.params, "euclidK", 8); set(p.params, "euclidN", 16); set(p.params, "mode", 0);
+            p.rebuild();
+            std::vector<std::pair<long long, juce::MidiMessage>> in{{0, juce::MidiMessage::noteOn(1, C, (juce::uint8)100)}, {1000, juce::MidiMessage::noteOn(1, E, (juce::uint8)100)}, {1900, juce::MidiMessage::noteOn(1, G, (juce::uint8)100)}};
+            LiveRun r; runLive(p, head, r, 60, sr, in);
+            int firstAt = -1; for (auto& [t, m] : r.out) if (m.isNoteOn()) { firstAt = t; break; }
+            int together = 0; for (auto& [t, m] : r.out) if (m.isNoteOn() && t == firstAt) ++together;
+            expect(firstAt >= 0 && together == 3, "аккорд, сыгранный за 40 мс, звучит целиком с первого удара, нот " + juce::String(together));
+            expect(p.chord() == std::vector<int>({C, E, G}), "аккорд собран");
+        }
+        // the voice split with a chord played in 40 ms uses every voice
+        {
+            RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
+            FakeHead head; head.playing = true; head.ppq = 0.25; p.setPlayHead(&head);
+            set(p.params, "source", 2); set(p.params, "polyA", 3); set(p.params, "polyB", 2); set(p.params, "resultant", 1); set(p.params, "mode", 2);
+            p.rebuild();
+            std::vector<std::pair<long long, juce::MidiMessage>> in{{0, juce::MidiMessage::noteOn(1, C, (juce::uint8)100)}, {1000, juce::MidiMessage::noteOn(1, E, (juce::uint8)100)}, {1900, juce::MidiMessage::noteOn(1, G, (juce::uint8)100)}};
+            LiveRun r; runLive(p, head, r, 200, sr, in);
+            std::set<int> used; for (auto& [t, m] : r.out) if (m.isNoteOn()) used.insert(m.getNoteNumber());
+            expect(used == std::set<int>({C, E, G}), "расщепление: три слоя, три голоса аккорда");
+        }
+        // latch switched off: nothing stays behind
+        {
+            RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
+            FakeHead head; head.playing = true; head.ppq = 0.25; p.setPlayHead(&head);
+            set(p.params, "source", 1); set(p.params, "euclidK", 8); set(p.params, "euclidN", 16); set(p.params, "mode", 0); set(p.params, "latch", 1);
+            p.rebuild();
+            auto in = chordIn(0);
+            for (int n : {C, E, G}) in.push_back({20000, juce::MidiMessage::noteOff(1, n)});
+            LiveRun r; runLive(p, head, r, 60, sr, in);
+            const int before = countOn(r);
+            expect(before > 0 && !p.chord().empty(), "фиксация держит аккорд после отпускания");
+            set(p.params, "latch", 0);
+            const int mark = (int)r.sample + 1024;
+            runLive(p, head, r, 100, sr, in);
+            int after = 0; for (auto& [t, m] : r.out) if (m.isNoteOn() && t > mark) ++after;
+            expect(after == 0 && p.chord().empty(), "фиксацию выключили: игра прекращается, аккорд пуст");
+        }
+        // all notes off from the host stops everything
+        {
+            RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
+            FakeHead head; head.playing = true; head.ppq = 0.25; p.setPlayHead(&head);
+            set(p.params, "source", 1); set(p.params, "euclidK", 8); set(p.params, "euclidN", 16); set(p.params, "mode", 0);
+            p.rebuild();
+            auto in = chordIn(0);
+            in.push_back({20000, juce::MidiMessage::allNotesOff(1)});
+            LiveRun r; runLive(p, head, r, 150, sr, in);
+            int after = 0; for (auto& [t, m] : r.out) if (m.isNoteOn() && t > 20000 + 512) ++after;
+            expect(countOn(r) > 0 && after == 0 && p.chord().empty(), "CC 123 от хоста останавливает игру");
+        }
+        // a note that is still open when the host restarts the plug-in gets its note-off
+        {
+            RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
+            FakeHead head; head.playing = true; head.ppq = 0.0; p.setPlayHead(&head);
+            set(p.params, "source", 1); set(p.params, "euclidK", 8); set(p.params, "euclidN", 16); set(p.params, "mode", 0);
+            p.rebuild();
+            auto in = chordIn(0);
+            LiveRun r;
+            bool open = false;
+            for (int i = 0; i < 100 && !open; ++i) {
+                runLive(p, head, r, 1, sr, in);
+                int ons = 0, offs = 0;
+                for (auto& [t, m] : r.out) { ons += m.isNoteOn(); offs += m.isNoteOff(); }
+                open = ons > offs;
+            }
+            expect(open, "в тесте есть открытая нота");
+            LiveRun r2;
+            p.prepareToPlay(sr, 512);
+            p.setPlayHead(&head);
+            runLive(p, head, r2, 1, sr, {});
+            int offs = 0; for (auto& [t, m] : r2.out) offs += m.isNoteOff();
+            expect(offs >= 1, "после перезапуска открытые ноты закрываются");
+        }
+        // a longer note length reaches the output
+        {
+            RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
+            FakeHead head; head.playing = true; head.ppq = 0.25; p.setPlayHead(&head);
+            set(p.params, "source", 1); set(p.params, "euclidK", 4); set(p.params, "euclidN", 16); set(p.params, "mode", 0); set(p.params, "noteLength", 100);
+            p.rebuild();
+            LiveRun r; runLive(p, head, r, 200, sr, chordIn(0));
+            int on0 = -1, off0 = -1;
+            for (auto& [t, m] : r.out) { if (m.isNoteOn() && m.getNoteNumber() == C && on0 < 0) on0 = t; if (m.isNoteOff() && m.getNoteNumber() == C && off0 < 0) off0 = t; }
+            // 479 ticks at 120 bpm is 23 950 samples, and the note closes before the next hit (480 ticks)
+            expect(on0 >= 0 && std::abs((off0 - on0) - 23950) <= 4, "длина 100: нота тянется до следующей, сэмплов " + juce::String(off0 - on0));
+        }
+        // randomizers in Live: the hits stay in order, notes close
+        {
+            RhythmLiveProcessor p; p.prepareToPlay(sr, 512);
+            FakeHead head; head.playing = true; head.ppq = 0.25; p.setPlayHead(&head);
+            set(p.params, "source", 0); set(p.params, "catalog", 2001); set(p.params, "mode", 0); set(p.params, "velRandom", 10); set(p.params, "timeRandom", 10); set(p.params, "noteLength", 100);
+            p.rebuild();
+            LiveRun r; runLive(p, head, r, 400, sr, chordIn(0));
+            std::set<int> vels; int ons = 0, offs = 0;
+            for (auto& [t, m] : r.out) { if (m.isNoteOn() && m.getNoteNumber() == C) { vels.insert(m.getVelocity()); ++ons; } if (m.isNoteOff() && m.getNoteNumber() == C) ++offs; }
+            expect(ons > 8 && vels.size() > 3 && offs >= ons - 1, "рандомайзеры в Live: громкость меняется, ноты закрываются");
         }
         // other MIDI passes through, the key itself does not
         {
@@ -257,7 +368,7 @@ int main(int argc, char** argv) {
             p.rebuild();
             std::vector<std::pair<long long, juce::MidiMessage>> in{{0, juce::MidiMessage::noteOn(1, C, (juce::uint8)100)}, {200, juce::MidiMessage::noteOn(1, E, (juce::uint8)100)}, {450, juce::MidiMessage::noteOn(1, G, (juce::uint8)100)}};
             LiveRun r; runLive(p, head, r, 60, sr, in);
-            expect(p.chord() == std::vector<int>({C, E, G}), "окно 14 мс собирает аккорд из нот, сыгранных почти разом");
+            expect(p.chord() == std::vector<int>({C, E, G}), "аккорд из нот, сыгранных почти разом");
         }
         // recording and the file for dragging
         {
@@ -274,6 +385,96 @@ int main(int argc, char** argv) {
             p.clearRecording();
             expect(p.recordedNotes() == 0 && !p.writeRecordingFile().existsAsFile(), "очистка записи");
         }
+    }
+    // 5b. variants, notes of their own length, randomizers in the file, state
+    {
+        RhythmProcessor p;
+        set(p.params, "source", 4); set(p.params, "seed", 7);
+        p.rebuild();
+        const auto first = p.rhythm().layers[0];
+        expect(!p.canGoBack(), "варианты: назад нельзя, пока истории нет");
+        std::vector<int> seeds;
+        seeds.push_back((int)std::lround(p.params.getRawParameterValue("seed")->load()));
+        for (int i = 0; i < 12; ++i) { p.stepVariant(1); pump(20); seeds.push_back((int)std::lround(p.params.getRawParameterValue("seed")->load())); }
+        std::set<int> distinct(seeds.begin(), seeds.end());
+        expect(p.variantCount() == 13 && p.variantNumber() == 13 && distinct.size() == seeds.size(), "варианты: двенадцать новых, все разные");
+        for (int i = 0; i < 10; ++i) { p.stepVariant(-1); pump(20); }
+        expect(p.variantNumber() == 3 && (int)std::lround(p.params.getRawParameterValue("seed")->load()) == seeds[2], "варианты: десять шагов назад возвращают тот же вариант");
+        juce::MemoryBlock st; p.getStateInformation(st);
+        RhythmProcessor q; q.setStateInformation(st.getData(), (int)st.getSize());
+        expect(q.variantCount() == 13 && q.variantNumber() == 3, "варианты: история живёт в проекте");
+        for (int i = 0; i < 2; ++i) { p.stepVariant(-1); pump(20); }
+        expect(p.rhythm().layers[0] == first && !p.canGoBack(), "варианты: первый вариант вернулся как был");
+        p.stepVariant(1); pump(20);
+        p.stepVariant(-1); pump(20);
+        p.stepVariant(1); pump(20);
+        expect(p.variantNumber() == 2 && p.variantCount() == 13, "варианты: вперёд по истории не строит новый");
+    }
+    {
+        RhythmProcessor p;
+        set(p.params, "source", 1); set(p.params, "euclidK", 4); set(p.params, "euclidN", 16);
+        p.rebuild();
+        p.setNoteLen(0, 4, 100);
+        bool own = false, others = true;
+        for (const auto& e : p.loop()->events) {
+            if (e.step == 4) own = e.length == e.gapNext - 1; else if (e.length != rhy::kStaccato) others = false;
+        }
+        expect(own && others && p.noteLenOf(0, 4) == 100, "длина одной ноты: она тянется до следующей, остальные стаккато");
+        juce::MemoryBlock st; p.getStateInformation(st);
+        RhythmProcessor q; q.setStateInformation(st.getData(), (int)st.getSize());
+        expect(q.noteLenOf(0, 4) == 100, "длина одной ноты живёт в проекте");
+        auto f = q.writeRhythmFile(1, false);
+        juce::MemoryBlock mb; f.loadFileAsData(mb);
+        // the file holds the long note: the second note-off sits 479 ticks after its note-on
+        int onAt = -1, offAt = -1, count = 0;
+        {
+            const unsigned char* d = (const unsigned char*)mb.getData();
+            std::vector<std::pair<int, int>> evs;
+            size_t pos = 14; int tracks = 0;
+            while (pos + 8 <= mb.getSize()) {
+                const size_t len = (size_t)(d[pos + 4] << 24 | d[pos + 5] << 16 | d[pos + 6] << 8 | d[pos + 7]);
+                if (++tracks == 2) {
+                    size_t i = pos + 8; long long tick = 0;
+                    while (i < pos + 8 + len) {
+                        unsigned delta = 0; while (true) { const unsigned char c = d[i++]; delta = (delta << 7) | (c & 0x7F); if (!(c & 0x80)) break; }
+                        tick += delta;
+                        if (d[i] == 0xFF) { i += 2; i += 1 + d[i - 0]; continue; }
+                        const int kind = d[i] & 0xF0;
+                        if (kind == 0x90) { if (count++ == 1) onAt = (int)tick; }
+                        else if (kind == 0x80 && onAt >= 0 && offAt < 0) offAt = (int)tick;
+                        i += 3;
+                    }
+                }
+                pos += 8 + len;
+            }
+        }
+        expect(onAt == 480 && offAt == 480 + 479, "в файле длинная нота идёт до следующей без наложения, нота с " + juce::String(onAt) + " до " + juce::String(offAt));
+        set(p.params, "euclidK", 5); p.rebuild();
+        expect(p.noteLenOf(0, 4) == -1, "длины отдельных нот сбрасываются, когда рисунок меняется");
+    }
+    {
+        RhythmProcessor p;
+        set(p.params, "source", 0); set(p.params, "catalog", 2001); p.rebuild();
+        auto readVel = [&](juce::File f) {
+            juce::MemoryBlock mb; f.loadFileAsData(mb);
+            std::vector<rhy::SourceNote> notes; int num, den; double bpm;
+            rhy::readMidi((const unsigned char*)mb.getData(), mb.getSize(), notes, num, den, bpm);
+            return notes;
+        };
+        auto plain = readVel(p.writeRhythmFile(8, false));
+        std::set<int> v0; for (auto& n : plain) v0.insert(n.velocity);
+        set(p.params, "velRandom", 10); set(p.params, "timeRandom", 10); p.rebuild();
+        auto rnd = readVel(p.writeRhythmFile(8, false));
+        std::set<int> v1; for (auto& n : rnd) v1.insert(n.velocity);
+        expect(v0.size() <= 3 && v1.size() > 8 && rnd.size() == plain.size(), "в файле с рандомайзерами громкости разные, нот столько же: " + juce::String((int)v1.size()) + " значений");
+        bool moved = false, sorted = true;
+        for (size_t i = 0; i < rnd.size(); ++i) { if (rnd[i].tick != plain[i].tick) moved = true; if (i && rnd[i].tick < rnd[i - 1].tick) sorted = false; }
+        expect(moved && sorted, "в файле с рандомайзерами начала нот сдвинуты и идут по порядку");
+        set(p.params, "velRandom", 0); set(p.params, "timeRandom", 0); p.rebuild();
+        auto again = readVel(p.writeRhythmFile(8, false));
+        bool same = again.size() == plain.size();
+        for (size_t i = 0; same && i < again.size(); ++i) if (again[i].tick != plain[i].tick || again[i].velocity != plain[i].velocity) same = false;
+        expect(same, "рандомайзеры на нуле: файл как был");
     }
     // 6. drag files
     {

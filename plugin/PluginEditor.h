@@ -14,6 +14,7 @@ private:
     RhythmProcessor& proc;
     RhythmLook look;
     juce::TooltipWindow tooltips{this, 600};
+    std::unique_ptr<juce::Drawable> logo;
     juce::TextButton play;
     juce::Slider tempo, bars;
     juce::ToggleButton hostTempo;

@@ -1,4 +1,5 @@
 #include "LiveEditor.h"
+#include "Logo.h"
 
 static juce::String noteNameLive(int n) {
     static const char* names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
@@ -6,6 +7,7 @@ static juce::String noteNameLive(int n) {
 }
 
 RhythmLiveEditor::RhythmLiveEditor(RhythmLiveProcessor& p) : AudioProcessorEditor(&p), panel(p), proc(p), take(p) {
+    logo = makeLogo();
     setLookAndFeel(&look);
     addAndMakeVisible(panel);
     panel.view.position = [this]() { return proc.chord().empty() ? -1.0 : proc.positionTicks(); };
@@ -19,7 +21,7 @@ RhythmLiveEditor::RhythmLiveEditor(RhythmLiveProcessor& p) : AudioProcessorEdito
     modeLabel.setColour(juce::Label::textColourId, ui::textDim);
     addAndMakeVisible(modeLabel);
     latch.setButtonText(U("Фиксация аккорда"));
-    latch.setTooltip(U("Аккорд продолжает играть после того, как вы отпустили клавиши. Новый аккорд заменяет старый."));
+    latch.setTooltip(U("Аккорд продолжает играть после того, как вы отпустили клавиши. Новый аккорд заменяет старый. Выключите, чтобы звук остановился."));
     latchAtt = std::make_unique<juce::ButtonParameterAttachment>(*proc.params.getParameter("latch"), latch);
     addAndMakeVisible(latch);
     tempoLabel.setText(U("Темп"), juce::dontSendNotification);
@@ -36,6 +38,17 @@ RhythmLiveEditor::RhythmLiveEditor(RhythmLiveProcessor& p) : AudioProcessorEdito
     hostTempo.setTooltip(U("Включено: темп и такт берутся из проекта. Выключено: темп из ползунка."));
     hostTempoAtt = std::make_unique<juce::ButtonParameterAttachment>(*proc.params.getParameter("hostTempo"), hostTempo);
     addAndMakeVisible(hostTempo);
+    windowLabel.setText(U("Окно аккорда"), juce::dontSendNotification);
+    windowLabel.setFont(ui::font(12.5f));
+    windowLabel.setColour(juce::Label::textColourId, ui::textDim);
+    window.setSliderStyle(juce::Slider::LinearHorizontal);
+    window.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 22);
+    window.setNumDecimalPlacesToDisplay(0);
+    window.setTextValueSuffix(U(" мс"));
+    window.setTooltip(U("Сколько миллисекунд ритм ждёт после первой клавиши, чтобы собрать весь аккорд. Если играют не все ноты, увеличьте."));
+    windowAtt = std::make_unique<juce::SliderParameterAttachment>(*proc.params.getParameter("chordWindow"), window);
+    addAndMakeVisible(window);
+    addAndMakeVisible(windowLabel);
 
     rec.setButtonText(U("Запись"));
     rec.getProperties().set("icon", "rec");
@@ -59,7 +72,7 @@ RhythmLiveEditor::RhythmLiveEditor(RhythmLiveProcessor& p) : AudioProcessorEdito
     hint.setColour(juce::Label::textColourId, ui::textDim);
     hint.setText(U("Поставьте плагин в слот MIDI FX перед инструментом. Зажмите аккорд."), juce::dontSendNotification);
     addAndMakeVisible(hint);
-    setSize(1100, 720);
+    setSize(1100, 820);
     startTimerHz(10);
 }
 
@@ -81,9 +94,7 @@ void RhythmLiveEditor::paint(juce::Graphics& g) {
     g.setColour(ui::text);
     g.setFont(ui::font(13.0f, true));
     g.drawText("RHYTHM ARRANGER LIVE", 24, 12, 300, 22, juce::Justification::centredLeft);
-    g.setColour(ui::textDim);
-    g.setFont(ui::font(12.0f));
-    g.drawText("Teilormusic", getWidth() - 24 - 200, 12, 200, 22, juce::Justification::centredRight);
+    drawLogo(g, logo.get(), juce::Rectangle<float>((float)getWidth() - 24.0f - 220.0f, 14.0f, 220.0f, 18.0f));
     g.setColour(ui::line);
     g.drawHorizontalLine(getHeight() - 150, 24, (float)getWidth() - 24);
 }
@@ -103,6 +114,9 @@ void RhythmLiveEditor::resized() {
     left.removeFromTop(6);
     auto r1 = left.removeFromTop(28);
     tempoLabel.setBounds(r1.removeFromLeft(70)); hostTempo.setBounds(r1.removeFromRight(130)); tempo.setBounds(r1);
+    left.removeFromTop(4);
+    auto r2 = left.removeFromTop(28);
+    windowLabel.setBounds(r2.removeFromLeft(100)); window.setBounds(r2);
     bottom.removeFromLeft(24);
     auto mid = bottom.removeFromLeft(300);
     chordLabel.setBounds(mid.removeFromTop(28));

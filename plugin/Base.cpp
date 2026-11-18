@@ -1,5 +1,6 @@
 #include "Base.h"
 #include <cmath>
+#include <algorithm>
 
 using APVTS = juce::AudioProcessorValueTreeState;
 
@@ -42,6 +43,13 @@ void RhythmBase::addRhythmParameters(APVTS::ParameterLayout& l) {
     integer("swing", "Swing", 0, 50, 0);
     integer("tempo", "Tempo", 40, 240, 100);
     flag("hostTempo", "Project tempo", true);
+    // expression (added in 0.2.0)
+    integer("noteLength", "Note length", 0, 100, 0);
+    integer("dynamics", "Dynamics", 0, 100, 50);
+    integer("curve", "Bar curve", 0, 10, 0);
+    integer("velRandom", "Velocity random", 0, 10, 0);
+    integer("timeRandom", "Timing random", 0, 10, 0);
+    integer("humanSeed", "Random seed", 1, 99999, 1);
 }
 
 RhythmBase::RhythmBase(const BusesProperties& buses, APVTS::ParameterLayout layout)
@@ -68,15 +76,44 @@ rhy::Settings RhythmBase::settings() const {
     s.tihaiLen = i("tihaiLen"); s.tihaiPhrase = i("tihaiPhrase");
     s.rotate = i("rotate"); s.retro = i("retro") != 0; s.invert = i("invert") != 0; s.augment = i("augment");
     s.density = i("density"); s.accentShift = i("accentShift"); s.phase = i("phase"); s.swing = i("swing");
+    s.noteLength = i("noteLength"); s.dynamics = i("dynamics"); s.curve = i("curve");
+    s.velRandom = i("velRandom"); s.timeRandom = i("timeRandom"); s.humanSeed = i("humanSeed");
     return s;
 }
 
+// everything that changes the shape of the rhythm; the notes with their own length belong to one such shape
+unsigned RhythmBase::structureHash(const rhy::Settings& s, const juce::String& importedName) {
+    unsigned h = 2166136261u;
+    auto add = [&](long long v) { h = (h ^ (unsigned)(v & 0xFFFFFFFF)) * 16777619u; h = (h ^ (unsigned)(v >> 32)) * 16777619u; };
+    add(s.source); add(s.catalogId); add(s.k); add(s.n); add(s.rot); add(s.polyA); add(s.polyB); add(s.resultant); add(s.polyBeats);
+    add(s.seed); add(s.randSteps); add(s.randDensity); add(s.randKind); add(s.tihaiLen); add(s.tihaiPhrase);
+    add(s.rotate); add(s.retro); add(s.invert); add(s.augment); add(s.density); add(s.accentShift); add(s.phase);
+    for (auto c : importedName) add((long long)c);
+    return h;
+}
+
 void RhythmBase::rebuild() {
-    const auto s = settings();
+    auto s = settings();
+    const unsigned sig = structureHash(s, importedName_);
+    if (sig != lensSig_) { noteLens_.clear(); lensSig_ = sig; }
+    s.noteLens = noteLens_;
     rhythm_ = rhy::build(s, imported_.ok() ? &imported_ : nullptr);
     auto lp = std::make_shared<Loop>();
     if (rhythm_.ok()) {
-        lp->events = rhy::cycleEvents(rhythm_, s.swing);
+        lp->feel = rhy::feelOf(s);
+        lp->events = rhy::cycleEvents(rhythm_, lp->feel);
+        for (const auto& e : lp->events) {
+            if (!lp->merged.empty() && lp->merged.back().tick == e.tick) lp->merged.back().velocity = std::max(lp->merged.back().velocity, e.velocity);
+            else lp->merged.push_back(e);
+        }
+        for (int l = 0; l < rhy::kMaxLayers; ++l) lp->notes[l] = rhythm_.noteOf(l);
+        const int nl = std::min((int)rhythm_.layers.size(), rhy::kMaxLayers);
+        for (int l = 0; l < rhy::kMaxLayers; ++l) {
+            int rk = 0;
+            for (int m = 0; m < nl; ++m)                  // only the layers that exist take part in the ranking
+                if (lp->notes[m] < lp->notes[l] || (lp->notes[m] == lp->notes[l] && m < l)) ++rk;
+            lp->rank[l] = rk;
+        }
         lp->cycleTicks = rhythm_.cycleTicks;
         lp->layers = (int)rhythm_.layers.size();
         lp->meterNum = rhythm_.meterNum;
@@ -123,10 +160,43 @@ juce::File RhythmBase::writeRhythmFile(int bars, bool separateTracks) const {
     o.bars = bars;
     o.separateTracks = separateTracks;
     o.bpm = effectiveBpm();
-    o.swing = (int)std::lround(params.getRawParameterValue("swing")->load());
+    o.feel = rhy::feelOf(settings());
     juce::String name = juce::String(rhythm_.midiName) + (separateTracks ? " layers" : "");
     name = name.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_");
     return writeTempFile(rhy::writeMidi(rhythm_, o), name);
+}
+
+void RhythmBase::stepVariant(int dir) {
+    if (variants_.empty()) { variants_.push_back((int)std::lround(params.getRawParameterValue("seed")->load())); varPos_ = 0; }
+    if (dir < 0) {
+        if (varPos_ <= 0) return;
+        --varPos_;
+    } else if (varPos_ + 1 < (int)variants_.size()) {
+        ++varPos_;
+    } else {
+        const int cur = variants_[(size_t)varPos_];
+        int v = cur;
+        while (v == cur) v = 1 + juce::Random::getSystemRandom().nextInt(99999);
+        variants_.push_back(v);
+        if (variants_.size() > 100) variants_.erase(variants_.begin());
+        varPos_ = (int)variants_.size() - 1;
+    }
+    setParamValue("seed", (float)variants_[(size_t)varPos_]);
+}
+
+void RhythmBase::rerollHumanSeed() {
+    setParamValue("humanSeed", (float)(1 + juce::Random::getSystemRandom().nextInt(99999)));
+}
+
+void RhythmBase::setNoteLen(int layer, int step, int pct) {
+    noteLens_.erase(std::remove_if(noteLens_.begin(), noteLens_.end(), [&](const rhy::NoteLen& n) { return n.layer == layer && n.step == step; }), noteLens_.end());
+    if (pct >= 0) noteLens_.push_back({layer, step, std::min(100, pct)});
+    rebuild();
+}
+
+int RhythmBase::noteLenOf(int layer, int step) const {
+    for (const auto& n : noteLens_) if (n.layer == layer && n.step == step) return n.pct;
+    return -1;
 }
 
 void RhythmBase::readHost(juce::AudioPlayHead::PositionInfo& info, bool& have) {
@@ -152,6 +222,20 @@ void RhythmBase::getStateInformation(juce::MemoryBlock& dest) {
         im->setAttribute("den", imported_.meterDen);
         im->setAttribute("pattern", juce::String(rhy::patternString(imported_.layers[0])));
     }
+    if (!noteLens_.empty()) {
+        juce::StringArray a;
+        for (const auto& n : noteLens_) a.add(juce::String(n.layer) + ":" + juce::String(n.step) + ":" + juce::String(n.pct));
+        auto* nl = xml->createNewChildElement("NoteLens");
+        nl->setAttribute("list", a.joinIntoString(","));
+        nl->setAttribute("sig", juce::String((juce::int64)lensSig_));
+    }
+    if (!variants_.empty()) {
+        juce::StringArray a;
+        for (int v : variants_) a.add(juce::String(v));
+        auto* vr = xml->createNewChildElement("Variants");
+        vr->setAttribute("list", a.joinIntoString(","));
+        vr->setAttribute("pos", varPos_);
+    }
     copyXmlToBinary(*xml, dest);
 }
 
@@ -176,6 +260,21 @@ void RhythmBase::setStateInformation(const void* data, int size) {
         }
     }
     if (auto* st = xml->getChildByName(params.state.getType())) params.replaceState(juce::ValueTree::fromXml(*st));
+    variants_.clear(); varPos_ = -1;
+    if (auto* vr = xml->getChildByName("Variants")) {
+        for (auto& t : juce::StringArray::fromTokens(vr->getStringAttribute("list"), ",", "")) if (t.getIntValue() > 0) variants_.push_back(t.getIntValue());
+        varPos_ = std::min(vr->getIntAttribute("pos", 0), (int)variants_.size() - 1);
+        if (variants_.empty()) varPos_ = -1;
+    }
+    noteLens_.clear();
+    lensSig_ = 0;
+    if (auto* nl = xml->getChildByName("NoteLens")) {
+        for (auto& t : juce::StringArray::fromTokens(nl->getStringAttribute("list"), ",", "")) {
+            auto p = juce::StringArray::fromTokens(t, ":", "");
+            if (p.size() == 3) noteLens_.push_back({p[0].getIntValue(), p[1].getIntValue(), std::max(0, std::min(100, p[2].getIntValue()))});
+        }
+        lensSig_ = (unsigned)nl->getStringAttribute("sig").getLargeIntValue();
+    }
     rebuild();
 }
 

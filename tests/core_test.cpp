@@ -7,6 +7,7 @@
 using namespace rhy;
 
 static int failures = 0, checks = 0;
+static const Feel nofeel;
 static void expect(bool ok, const std::string& what) {
     ++checks;
     if (!ok) { ++failures; std::printf("  FAIL %s\n", what.c_str()); }
@@ -112,7 +113,7 @@ int main() {
         auto r = polyrhythm(3, 2, true, 4);
         expect(r.length == 6 && r.layers.size() == 3 && r.cycleTicks == 1920, "полиритм 3:2: 6 шагов, три слоя, такт 1920");
         expect(onsets(r.layers[0]) == "0,2,4" && onsets(r.layers[1]) == "0,3" && onsets(r.layers[2]) == "0,2,3,4", "полиритм 3:2: позиции");
-        auto ev = cycleEvents(r, 0);
+        auto ev = cycleEvents(r, nofeel);
         std::set<int> t3;
         for (auto& e : ev) if (e.layer == 0) t3.insert(e.tick);
         expect(t3 == std::set<int>({0, 640, 1280}), "полиритм 3:2: тики первого слоя");
@@ -235,7 +236,7 @@ int main() {
         auto pb = writeMidi(pr, mo);
         readMidi(pb.data(), pb.size(), notes, num, den, bpm);
         std::set<int> used; for (auto& n : notes) used.insert(n.note);
-        expect(used == std::set<int>({60, 48, 72}), "полиритм: слои на C3, C2, C4");
+        expect(used == std::set<int>({36, 60, 48}), "полиритм: первый слой C1, второй C3, результат C2");
         MidiOptions sep; sep.separateTracks = true; sep.bars = 1;
         auto sb = writeMidi(pr, sep);
         readMidi(sb.data(), sb.size(), notes, num, den, bpm);
@@ -266,7 +267,7 @@ int main() {
             q.density = g.below(7) - 3; q.accentShift = g.below(4); q.phase = g.below(4); q.swing = g.below(51);
             auto r2 = build(q);
             if (!r2.ok()) { if (q.source == sTihai || q.source == sPoly || q.source == sPolymeter) continue; ++sweepBad; continue; }
-            MidiOptions mm; mm.swing = q.swing; mm.bars = 2;
+            MidiOptions mm; mm.feel = feelOf(q); mm.bars = 2;
             auto by = writeMidi(r2, mm);
             int h = 0; for (auto& l : r2.layers) { if ((int)l.size() != r2.length) ++sweepBad; h += hitCount(l); }
             if (!readMidi(by.data(), by.size(), notes, num, den, bpm) || (int)notes.size() != 2 * h) ++sweepBad;
@@ -276,10 +277,11 @@ int main() {
         // swing
         Settings ss; ss.source = sEuclid; ss.k = 8; ss.n = 16;
         auto sr = build(ss);
-        auto evs = cycleEvents(sr, 30);
+        Feel f30; f30.swing = 30;
+        auto evs = cycleEvents(sr, f30);
         int off = 0, on = 0; for (auto& e : evs) { if (e.step % 2) { on += (e.tick == e.step * 120 + 36); } else off += (e.tick == e.step * 120); }
         expect(off + on == (int)evs.size(), "свинг 30% сдвигает нечётные шаги на 36 тиков");
-        expect(cycleEvents(sr, 0)[0].length == kStaccato, "длина ноты всегда 60 тиков");
+        expect(cycleEvents(sr, nofeel)[0].length == kStaccato, "длина ноты всегда 60 тиков");
     }
     // 8b. a note list written as a file reads back unchanged
     {
@@ -289,13 +291,103 @@ int main() {
         bool ok = readMidi(bytes.data(), bytes.size(), out, num, den, bpm);
         expect(ok && out.size() == 3 && out[1].tick == 240 && out[1].note == 64 && out[2].velocity == 112 && num == 3 && den == 4 && std::abs(bpm - 90) < 0.01, "запись Live читается обратно");
     }
+    // 8c. expression: length, dynamics, curve, randomizers
+    {
+        Settings s; s.source = sEuclid; s.k = 4; s.n = 16;
+        auto r = build(s);
+        // length: 0 is staccato, 100 reaches one tick before the next note, never further
+        Feel f; f.noteLength = 100;
+        auto ev = cycleEvents(r, f);
+        bool full = true, stac = true;
+        for (auto& e : ev) { if (e.length != e.gapNext - 1) full = false; }
+        for (auto& e : cycleEvents(r, nofeel)) if (e.length != kStaccato) stac = false;
+        expect(full && stac, "длина: 0 это стаккато 60, 100 это до начала следующей ноты без наложения");
+        f.noteLength = 50;
+        auto half = cycleEvents(r, f);
+        expect(half[0].length > kStaccato && half[0].length < half[0].gapNext - 1, "длина 50 лежит между стаккато и полной");
+        // a note of its own length
+        Settings s2 = s; s2.noteLens.push_back({0, 4, 100});
+        auto r2 = build(s2);
+        int own = 0, other = 0;
+        for (auto& e : cycleEvents(r2, nofeel)) { if (e.step == 4) own = e.length; else other = e.length; }
+        expect(own == 479 && other == kStaccato, "длина одной выбранной ноты");
+        // very close notes get a shorter staccato instead of an overlap
+        Settings s3; s3.source = sEuclid; s3.k = 16; s3.n = 16; auto r3 = build(s3);
+        bool nooverlap = true;
+        for (auto& e : cycleEvents(r3, f)) if (e.length >= e.gapNext) nooverlap = false;
+        expect(nooverlap, "длина не пересекает начало следующей ноты");
+        // dynamics: 50 as it was, 0 flat, 100 wider
+        Settings d; d.source = sCatalog; d.catalogId = 2001;
+        auto rd = build(d);
+        Feel fd;
+        auto base = cycleEvents(rd, fd);
+        fd.dynamics = 0; auto flat = cycleEvents(rd, fd);
+        fd.dynamics = 100; auto wide = cycleEvents(rd, fd);
+        int vb = 0, vf = 0, vw = 0;
+        for (size_t i = 0; i < base.size(); ++i) {
+            if (base[i].level == 3) { vb = base[i].velocity; vf = flat[i].velocity; vw = wide[i].velocity; }
+        }
+        expect(vb == 112 && vf == 90 && vw == 127, "динамика: 50 как раньше, 0 ровно, 100 шире");
+        // curve: first note keeps its force, the middle dips, the end rises
+        Settings c; c.source = sEuclid; c.k = 16; c.n = 16; c.curve = 0;
+        auto rc = build(c);
+        Feel fc; fc.curve = 10;
+        auto flatc = cycleEvents(rc, nofeel), curved = cycleEvents(rc, fc);
+        expect(curved[0].velocity == flatc[0].velocity, "кривая: первый удар не меняется");
+        expect(curved[8].velocity < flatc[8].velocity - 8, "кривая: середина проседает");
+        expect(curved[15].velocity > flatc[15].velocity + 8, "кривая: к концу растёт");
+        // randomizers: 0 changes nothing, deterministic, bounded, order and no overlap
+        Settings h; h.source = sCatalog; h.catalogId = 2001;
+        auto rh = build(h);
+        Feel fh; fh.velRandom = 10; fh.timeRandom = 10; fh.humanSeed = 5; fh.noteLength = 100;
+        auto bh = cycleEvents(rh, fh);
+        bool same0 = true;
+        { Feel z; auto be = cycleEvents(rh, z); for (auto& e : be) { auto o = shapeEvent(e, 3, z); if (o.tick != e.tick || o.velocity != e.velocity || o.length != e.length) same0 = false; } }
+        expect(same0, "рандомайзеры на нуле ничего не меняют");
+        bool det = true, bounded = true, ordered = true, clear = true, varies = false;
+        for (long long cyc = 0; cyc < 40; ++cyc) {
+            std::vector<Event> sh;
+            for (auto& e : bh) {
+                auto a = shapeEvent(e, cyc, fh), b = shapeEvent(e, cyc, fh);
+                if (a.tick != b.tick || a.velocity != b.velocity || a.length != b.length) det = false;
+                if (std::abs(a.tick - e.tick) > 30 || std::abs(a.velocity - e.velocity) > 30 || a.velocity < 1 || a.velocity > 127) bounded = false;
+                if (a.tick != e.tick || a.velocity != e.velocity) varies = true;
+                sh.push_back(a);
+            }
+            for (size_t i = 0; i + 1 < sh.size(); ++i) {                  // single layer: sorted by tick, next in line
+                if (sh[i + 1].tick <= sh[i].tick) ordered = false;
+                if (sh[i].tick + sh[i].length >= sh[i + 1].tick) clear = false;
+            }
+        }
+        expect(det && bounded && varies, "рандомайзеры: повторяемы, в пределах 30 тиков и 30 скоростей, действительно меняют");
+        expect(ordered && clear, "рандомайзеры: порядок нот не меняется, длина не наезжает на следующую");
+        // wrapped note: the last note of the cycle against the first of the next one
+        auto lastShaped = shapeEvent(bh.back(), 7, fh);
+        auto firstNext = shapeEvent(bh.front(), 8, fh);
+        expect(lastShaped.tick + lastShaped.length < rh.cycleTicks + firstNext.tick, "длина последней ноты не залезает в первую следующего такта");
+        // the file is bounded too and starts at 0 or later
+        MidiOptions mo; mo.bars = 6; mo.feel = fh;
+        auto bytes = writeMidi(rh, mo);
+        std::vector<SourceNote> notes; int num, den; double bpm;
+        readMidi(bytes.data(), bytes.size(), notes, num, den, bpm);
+        expect(notes.size() == 30 && notes[0].tick >= 0, "файл с рандомайзерами читается, пять ударов на шесть тактов");
+        // layers of the polyrhythm and polymeter: C1, C3, result on C2
+        auto pr = polyrhythm(3, 2, true, 4);
+        expect(pr.noteOf(0) == 36 && pr.noteOf(1) == 60 && pr.noteOf(2) == 48, "полиритм: слои C1, C3, результат C2");
+        auto pm = polymeter(3, 4);
+        expect(pm.noteOf(0) == 36 && pm.noteOf(1) == 60, "полиметр: слои C1 и C3");
+        Settings q; q.source = sEuclid; q.k = 3; q.n = 8;
+        expect(build(q).noteOf(0) == 60, "обычный ритм остаётся на C3");
+        expect(euclidName(3, 7) == "Евклид: 3 удара на 7 шагов" && euclidName(5, 8) == "Евклид: 5 ударов на 8 шагов" && euclidName(2, 3) == "Евклид: 2 удара на 3 шага" &&
+               euclidName(1, 21) == "Евклид: 1 удар на 21 шаг", "понятные имена евклидовых ритмов");
+    }
     // 9. arpeggiator
     {
         std::vector<int> chord{48, 55, 64, 72};
         expect(arpNotes(amGate, chord, 0, 0) == chord, "гейт: весь аккорд");
         expect(arpNotes(amArpeggio, chord, 0, 0) == std::vector<int>{48} && arpNotes(amArpeggio, chord, 0, 5) == std::vector<int>{55}, "арпеджио по кругу");
-        expect(arpNotes(amVoiceSplit, chord, 1, 0) == std::vector<int>{48}, "расщепление: слой C2 берёт низ");
-        expect(arpNotes(amVoiceSplit, chord, 0, 0) == std::vector<int>{55}, "расщепление: слой C3 берёт второй голос");
+        expect(arpNotes(amVoiceSplit, chord, 0, 0) == std::vector<int>{48}, "расщепление: нижний слой берёт низ");
+        expect(arpNotes(amVoiceSplit, chord, 1, 0) == std::vector<int>{55}, "расщепление: второй слой берёт второй голос");
         expect(arpNotes(amVoiceSplit, {60}, 3, 0) == std::vector<int>{60}, "расщепление: один звук для всех слоёв");
         expect(arpNotes(amGate, {}, 0, 0).empty(), "пустой аккорд молчит");
     }

@@ -16,6 +16,7 @@ public:
     bool producesMidi() const override { return true; }
     bool isMidiEffect() const override { return true; }
     double getTailLengthSeconds() const override { return 0; }
+    void releaseResources() override { flush_ = true; }
 
     // for the editor and the tests
     std::vector<int> chord() const { const juce::SpinLock::ScopedLockType l(lock_); return chordShown_; }
@@ -28,11 +29,13 @@ public:
 
 private:
     void noteOn(int note, int channel, long long clock);
+    void allNotesOff();               // forget every held and latched key
     void noteOff(int note);
     std::vector<int> held_, chord_;            // physically held keys; the chord that is played
     std::vector<int> chordShown_;
     int channel_ = 0;
-    long long clock_ = 0, chordOpenUntil_ = 0, lastOnAt_ = -1000000;
+    long long clock_ = 0, chordOpenUntil_ = 0;
+    bool lastLatch_ = false, flush_ = false;
     int hitCounter_ = 0;
     double sampleRate_ = 44100, freeTicks_ = 0;
     struct Off { long long at; int note, channel; };

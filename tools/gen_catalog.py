@@ -7,6 +7,13 @@ d = json.load(open(sys.argv[1], encoding='utf-8'))
 def ticks(step):
     if step.startswith('1/16') or step == 'абстр.': return 120
     return 240
+import re
+def plural(n, one, few, many):
+    a, b = n % 100, n % 10
+    return '%d %s' % (n, many if 11 <= a <= 14 else one if b == 1 else few if 2 <= b <= 4 else many)
+def nice(name):
+    m = re.match(r'^E\((\d+),(\d+)\)$', name)
+    return 'Евклид: %s на %s' % (plural(int(m.group(1)), 'удар', 'удара', 'ударов'), plural(int(m.group(2)), 'шаг', 'шага', 'шагов')) if m else name
 def esc(s): return s.replace('\\','\\\\').replace('"','\\"')
 cnt = collections.Counter()
 
@@ -44,9 +51,9 @@ SHORT = {1:'Евклидовы ритмы',2:'Африка и Карибы',3:'�
 for cid, s, x in d_out:
     secnames[s] = SHORT[s]
     if x.get('same'):
-        x['grp'] = x['grp'] + '; тот же рисунок: ' + ', '.join(x['same'])
+        x['grp'] = x['grp'] + '; тот же рисунок: ' + ', '.join(nice(n) for n in x['same'])
     out.append('        {%d, %d, "%s", "%s", %d, "%s", "%s", "%s", "%s"},' % (
-        cid, s, esc(x['name']), esc(x['region']), ticks(x['step']), esc(x['pat']), esc(x['grp']), esc(x['src']), esc(x['st'])))
+        cid, s, esc(nice(x['name'])), esc(x['region']), ticks(x['step']), esc(x['pat']), esc(x['grp']), esc(x['src']), esc(x['st'])))
 out += ['    };', '    return c;', '}', 'const char* categoryName(int c) {', '    switch (c) {']
 for s, n in sorted(secnames.items()):
     out.append('        case %d: return "%s";' % (s, esc(n)))

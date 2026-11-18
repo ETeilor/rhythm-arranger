@@ -14,14 +14,15 @@ private:
     RhythmLiveProcessor& proc;
     RhythmLook look;
     juce::TooltipWindow tooltips{this, 600};
+    std::unique_ptr<juce::Drawable> logo;
     juce::ComboBox mode;
     std::unique_ptr<juce::ComboBoxParameterAttachment> modeAtt;
     juce::ToggleButton latch, hostTempo;
     std::unique_ptr<juce::ButtonParameterAttachment> hostTempoAtt;
     std::unique_ptr<juce::ButtonParameterAttachment> latchAtt;
     juce::TextButton rec, clear;
-    juce::Slider tempo;
-    juce::Label tempoLabel, chordLabel, hint, modeLabel;
-    std::unique_ptr<juce::SliderParameterAttachment> tempoAtt;
+    juce::Slider tempo, window;
+    juce::Label tempoLabel, chordLabel, hint, modeLabel, windowLabel;
+    std::unique_ptr<juce::SliderParameterAttachment> tempoAtt, windowAtt;
     Card take;
 };

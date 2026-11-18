@@ -11,6 +11,7 @@ RhythmLiveProcessor::RhythmLiveProcessor()
                      l.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"mode", 1}, "Mode",
                                                                          juce::StringArray{"Gate", "Arpeggio", "Voice split"}, 1));
                      l.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{"latch", 1}, "Latch", false));
+                     l.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"chordWindow", 1}, "Chord window", 5, 200, 50));
                      return l;
                  }()) {
     held_.reserve(32); chord_.reserve(32); chordShown_.reserve(32); offs_.reserve(512); rec_.reserve(8192);
@@ -18,26 +19,30 @@ RhythmLiveProcessor::RhythmLiveProcessor()
 
 void RhythmLiveProcessor::prepareToPlay(double sr, int) {
     sampleRate_ = sr;
-    held_.clear(); chord_.clear(); offs_.clear();
+    flush_ = !offs_.empty();           // notes still sounding get their note-off in the first block
+    held_.clear(); chord_.clear();
+    {
+        const juce::SpinLock::ScopedLockType l(lock_);
+        chordShown_.clear();
+    }
     clock_ = 0;
 }
 
 juce::AudioProcessorEditor* RhythmLiveProcessor::createEditor() { return new RhythmLiveEditor(*this); }
 
 void RhythmLiveProcessor::noteOn(int note, int channel, long long clock) {
-    const long long window = (long long)(0.014 * sampleRate_);        // 14 ms to gather a chord
+    // The keys pressed together form the chord. A key pressed while others are held joins the chord; the chord
+    // starts over only when every key was released before (with latch: when the latched keys are replaced).
+    const long long window = (long long)(params.getRawParameterValue("chordWindow")->load() * 0.001 * sampleRate_);
     channel_ = channel;
-    const bool latch = params.getRawParameterValue("latch")->load() > 0.5f;
-    (void)latch;
-    if (held_.empty() || clock - lastOnAt_ > window) {                 // a new chord: the old one is dropped
+    if (held_.empty()) {
         chord_.clear();
-        chordOpenUntil_ = clock + window;
+        chordOpenUntil_ = clock + window;        // the first hit waits until the chord is complete
         hitCounter_ = 0;
     }
     if (std::find(held_.begin(), held_.end(), note) == held_.end()) held_.push_back(note);
     if (std::find(chord_.begin(), chord_.end(), note) == chord_.end()) chord_.push_back(note);
     std::sort(chord_.begin(), chord_.end());
-    lastOnAt_ = clock;
     const juce::SpinLock::ScopedLockType l(lock_);
     chordShown_ = chord_;
 }
@@ -48,6 +53,13 @@ void RhythmLiveProcessor::noteOff(int note) {
     if (!latch) chord_.erase(std::remove(chord_.begin(), chord_.end(), note), chord_.end());
     const juce::SpinLock::ScopedLockType l(lock_);
     chordShown_ = chord_;
+}
+
+void RhythmLiveProcessor::allNotesOff() {
+    held_.clear();
+    chord_.clear();
+    const juce::SpinLock::ScopedLockType l(lock_);
+    chordShown_.clear();
 }
 
 void RhythmLiveProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::MidiBuffer& midi) {
@@ -66,20 +78,31 @@ void RhythmLiveProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::Midi
     freeTicks_ = t1;
     const int mode = (int)std::lround(params.getRawParameterValue("mode")->load());
     auto lp = loop();
+    // latch switched off: the chord is what the fingers hold, nothing stays behind
+    const bool latch = params.getRawParameterValue("latch")->load() > 0.5f;
+    if (lastLatch_ && !latch) {
+        chord_ = held_;
+        std::sort(chord_.begin(), chord_.end());
+        const juce::SpinLock::ScopedLockType l(lock_);
+        chordShown_ = chord_;
+    }
+    lastLatch_ = latch;
 
     // the hits of this block
-    struct Hit { int at; double abs; int layer, vel; };
+    struct Hit { int at; double abs; int layer, vel, len; };
     Hit hits[512];
     int nh = 0;
     if (lp && lp->cycleTicks > 0) {
         const long long c0 = (long long)std::floor(t0 / lp->cycleTicks), c1 = (long long)std::floor(t1 / lp->cycleTicks);
-        for (long long c = c0; c <= c1; ++c)
-            for (const auto& e : lp->events) {
+        const auto& src = mode == rhy::amVoiceSplit ? lp->events : lp->merged;
+        for (long long c = c0 - 1; c <= c1; ++c)        // one cycle back: a note can be moved earlier across the bar line
+            for (const auto& base : src) {
+                const auto e = rhy::shapeEvent(base, c, lp->feel);
                 const double abs = (double)c * lp->cycleTicks + e.tick;
                 if (abs < t0 || abs >= t1 || nh >= 512) continue;
-                if (mode != rhy::amVoiceSplit && nh > 0 && hits[nh - 1].abs == abs) { hits[nh - 1].vel = std::max(hits[nh - 1].vel, e.velocity); continue; }
-                hits[nh++] = {(int)((abs - t0) / tps), abs, e.layer, e.velocity};
+                hits[nh++] = {(int)((abs - t0) / tps), abs, e.layer, e.velocity, e.length};
             }
+        std::stable_sort(hits, hits + nh, [](const Hit& a, const Hit& b) { return a.abs < b.abs; });
         posTicks_ = std::fmod(t1, (double)lp->cycleTicks);
     }
 
@@ -99,15 +122,23 @@ void RhythmLiveProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::Midi
             ++mi;
             if (msg.isNoteOn()) noteOn(msg.getNoteNumber(), msg.getChannel() - 1, base + pos);
             else if (msg.isNoteOff()) noteOff(msg.getNoteNumber());
-            else out.addEvent(msg, pos);                                  // everything else passes through
+            else {
+                if (msg.isAllNotesOff() || msg.isAllSoundOff()) { allNotesOff(); flush_ = true; }
+                out.addEvent(msg, pos);
+            }                                  // everything else passes through
         }
     };
 
+    if (flush_) {                                                          // the ends of notes that are still open
+        for (const auto& o : offs_) out.addEvent(juce::MidiMessage::noteOff(o.channel + 1, o.note), 0);
+        offs_.clear();
+        flush_ = false;
+    }
     for (int h = 0; h < nh; ++h) {
         handleMessages(hits[h].at);
         if (chord_.empty() || base + hits[h].at < chordOpenUntil_) continue;
-        const auto notes = rhy::arpNotes(mode, chord_, hits[h].layer, hitCounter_++);
-        const long long len = (long long)std::lround(rhy::kStaccato / tps);
+        const auto notes = rhy::arpNotes(mode, chord_, lp ? lp->rank[std::min(hits[h].layer, rhy::kMaxLayers - 1)] : hits[h].layer, hitCounter_++);
+        const long long len = std::max<long long>(1, (long long)std::lround(hits[h].len / tps));
         for (int note : notes) {
             for (size_t o = 0; o < offs_.size();)              // the same key still sounding: close it first
                 if (offs_[o].note == note && offs_[o].channel == channel_) {

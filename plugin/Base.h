@@ -7,8 +7,12 @@
 // Everything both plug-ins share: parameters, the rhythm built from them, the loop the audio thread plays,
 // an imported MIDI rhythm, and files for dragging into a track.
 struct Loop {
-    std::vector<rhy::Event> events;      // one cycle, swing already written into the ticks
+    std::vector<rhy::Event> events;      // one cycle: swing, dynamics, curve and length are in, the random part is not
+    std::vector<rhy::Event> merged;      // the same with layers that hit together folded into one hit (gate and arpeggio)
+    rhy::Feel feel;                      // for rhy::shapeEvent, which adds the random part per cycle
     int cycleTicks = 0, layers = 0, meterNum = 4, meterDen = 4;
+    int notes[rhy::kMaxLayers] = {60, 48, 72, 84};   // output note of every layer
+    int rank[rhy::kMaxLayers] = {0, 1, 2, 3};        // 0 is the lowest layer note, used by the voice split
 };
 
 class RhythmBase : public juce::AudioProcessor,
@@ -32,6 +36,16 @@ public:
     std::function<void()> onRhythmChanged;
     juce::File writeTempFile(const std::vector<unsigned char>& bytes, const juce::String& baseName) const;
     juce::File writeRhythmFile(int bars, bool separateTracks) const;
+
+    // variants of the random tab: a history of seeds, back and forward
+    void stepVariant(int dir);                 // -1 back, +1 forward; at the end a new variant is drawn
+    int variantNumber() const { return varPos_ + 1; }
+    int variantCount() const { return (int)variants_.size(); }
+    bool canGoBack() const { return varPos_ > 0; }
+    // a note of its own length (percent, 0..100); pct < 0 removes it again
+    void setNoteLen(int layer, int step, int pct);
+    int noteLenOf(int layer, int step) const;
+    void rerollHumanSeed();
 
     // audio thread
     std::shared_ptr<const Loop> loop() const { return std::atomic_load(&loop_); }
@@ -61,7 +75,12 @@ protected:
     std::atomic<double> hostBpm_{0.0};
 
 private:
+    static unsigned structureHash(const rhy::Settings& s, const juce::String& importedName);
     rhy::Rhythm rhythm_, imported_;
+    std::vector<rhy::NoteLen> noteLens_;
+    unsigned lensSig_ = 0;
+    std::vector<int> variants_;
+    int varPos_ = -1;
     juce::String importedName_;
     std::shared_ptr<const Loop> loop_;
     mutable int dragCounter_ = 0;

@@ -10,10 +10,15 @@ public:
     void mouseDown(const juce::MouseEvent&) override;
     std::function<double()> position;        // ticks inside the cycle, or negative when idle
     std::function<void(int)> onLayerClick;   // a click on a layer label
+    std::function<void(int, int)> onNoteSelected;   // a click on a hit: layer and step, or -1 -1 for none
     bool circle = false;
+    int selLayer = -1, selStep = -1;          // the hit whose own length is edited
 private:
+    void markNote(juce::Graphics&, int layer, int step, float cx, float cy, float rad);
+    struct Dot { int layer, step; juce::Point<float> c; float r; };
     RhythmBase& proc;
     std::vector<juce::Rectangle<float>> labelRects;
+    std::vector<Dot> dots;
 };
 
 // A card that can be dragged to a Logic track as a MIDI file.
@@ -69,18 +74,26 @@ private:
     juce::TextEditor search;
     juce::ComboBox category;
     juce::ListBox list{{}, this};
-    std::vector<const rhy::CatalogEntry*> shown_;
+    struct CatRow { const rhy::CatalogEntry* e; int header; int count; };   // a rhythm, or a category header
+    std::vector<CatRow> shown_;
+    void syncCatalogSelection();
     bool syncing_ = false;
     // other sources
-    Row eK, eN, eRot, pA, pB, pBeats, rSteps, rDens, rSeed, tLen, tPhrase;
+    Row eK, eN, eRot, pA, pB, pBeats, rSteps, rDens, tLen, tPhrase;
     juce::ToggleButton resultant;
     std::unique_ptr<juce::ButtonParameterAttachment> resultantAtt;
     juce::ComboBox randKind;
     std::unique_ptr<juce::ComboBoxParameterAttachment> randKindAtt;
-    juce::TextButton newSeed, openFile, circleBtn;
-    juce::Label fileName, srcHint;
+    juce::TextButton prevVar, nextVar, openFile, circleBtn, rerollHuman, resetNote;
+    juce::Label fileName, srcHint, variantLabel;
+    // expression
+    Row swing, noteLength, dynamics, curve, velRandom, timeRandom, noteSlider;
+    juce::Label exprHead, noteInfo;
+    bool syncingNote_ = false;
+    void selectNote(int layer, int step);
+    void updateNoteControls();
     // transformations
-    Row rotate, density, accentShift, phase, swing;
+    Row rotate, density, accentShift, phase;
     juce::ToggleButton retro, invert;
     std::unique_ptr<juce::ButtonParameterAttachment> retroAtt, invertAtt;
     juce::ComboBox augment;

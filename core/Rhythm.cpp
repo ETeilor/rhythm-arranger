@@ -159,6 +159,21 @@ std::vector<std::vector<int>> necklaces(int k, int n) {
     return out;
 }
 
+// ---------- names
+static std::string plural(int n, const char* one, const char* few, const char* many) {
+    const int a = n % 100, b = n % 10;
+    return std::to_string(n) + " " + ((a >= 11 && a <= 14) ? many : b == 1 ? one : (b >= 2 && b <= 4) ? few : many);
+}
+std::string euclidName(int k, int n) {
+    return "Евклид: " + plural(k, "удар", "удара", "ударов") + " на " + plural(n, "шаг", "шага", "шагов");
+}
+Feel feelOf(const Settings& s) {
+    Feel f;
+    f.swing = s.swing; f.noteLength = s.noteLength; f.dynamics = s.dynamics; f.curve = s.curve;
+    f.velRandom = s.velRandom; f.timeRandom = s.timeRandom; f.humanSeed = s.humanSeed;
+    return f;
+}
+
 // ---------- layout helpers
 static void setMeter(Rhythm& r) {
     if (r.stepTicks > 0) {
@@ -243,6 +258,7 @@ Rhythm polyrhythm(int a, int b, bool resultant, int beats) {
     r.layers = {pa, pb};
     r.layerNames = {"Слой " + std::to_string(a), "Слой " + std::to_string(b)};
     if (resultant) { r.layers.push_back(pr); r.layerNames.push_back("Результат"); }
+    r.notes.assign(kPolyNote, kPolyNote + kMaxLayers);
     setMeter(r);
     return r;
 }
@@ -265,6 +281,7 @@ Rhythm polymeter(int a, int b) {
     r.stepTicks = 240;
     r.layers = {pa, pb};
     r.layerNames = {"Такт " + std::to_string(a), "Такт " + std::to_string(b)};
+    r.notes.assign(kPolyNote, kPolyNote + kMaxLayers);
     setMeter(r);
     return r;
 }
@@ -326,7 +343,7 @@ static Pattern randomPattern(const Settings& s, std::string& label) {
                     if (pick < 0) { p[(size_t)pool[j]] = 2; pool.erase(pool.begin() + (long)j); break; }
                 }
             }
-            label = "по весу долей";
+            label = "по сильным долям";
             break;
         }
         case rkNecklace: {
@@ -335,7 +352,7 @@ static Pattern randomPattern(const Settings& s, std::string& label) {
             const auto& pos = all[(size_t)rng.below((int)all.size())];
             for (int x : pos) p[(size_t)x] = 2;
             p = rotate(p, rng.below(n));
-            label = "ожерелье из " + std::to_string(all.size());
+            label = "разные рисунки, всего " + std::to_string(all.size());
             break;
         }
         default:
@@ -354,7 +371,7 @@ Rhythm build(const Settings& s, const Rhythm* imported) {
         case sCatalog: { const auto* e = findCatalog(s.catalogId); if (e) r = fromCatalog(*e); break; }
         case sEuclid: {
             Pattern p = accentByWeight(euclid(s.k, s.n, s.rot));
-            r = fromPattern("E(" + std::to_string(s.k) + "," + std::to_string(s.n) + ")", "Euclid " + std::to_string(s.k) + "-" + std::to_string(s.n), 120, p);
+            r = fromPattern(euclidName(s.k, s.n), "Euclid " + std::to_string(s.k) + "-" + std::to_string(s.n), 120, p);
             r.info = "Евклидов ритм: " + std::to_string(s.k) + " ударов на " + std::to_string(s.n) + " шагов, поворот " + std::to_string(s.rot);
             break;
         }
@@ -363,7 +380,7 @@ Rhythm build(const Settings& s, const Rhythm* imported) {
         case sRandom: {
             std::string label;
             Pattern p = randomPattern(s, label);
-            r = fromPattern("Случайный " + std::to_string(s.seed), "Random seed " + std::to_string(s.seed), 120, p);
+            r = fromPattern("Случайный ритм", "Random seed " + std::to_string(s.seed), 120, p);
             r.info = "Зерно " + std::to_string(s.seed) + ", " + label + ", шагов " + std::to_string(p.size());
             break;
         }
@@ -400,6 +417,11 @@ Rhythm build(const Settings& s, const Rhythm* imported) {
         r.layerNames.push_back("Фаза +" + std::to_string(s.phase));
     }
     setMeter(r);
+    if (r.notes.empty()) r.notes.assign(kLayerNote, kLayerNote + kMaxLayers);
+    r.lenPct.assign(r.layers.size(), std::vector<int>((size_t)r.length, -1));
+    for (const auto& nl : s.noteLens)
+        if (nl.layer >= 0 && nl.layer < (int)r.layers.size() && nl.step >= 0 && nl.step < r.length)
+            r.lenPct[(size_t)nl.layer][(size_t)nl.step] = std::max(0, std::min(100, nl.pct));
     return r;
 }
 
@@ -421,18 +443,76 @@ int swingDelay(const Rhythm& r, int step, int swingPercent) {
     return r.stepTicks * std::min(swingPercent, 50) / 100;
 }
 
-std::vector<Event> cycleEvents(const Rhythm& r, int swing) {
+static int clampVel(int v) { return v < 1 ? 1 : v > 127 ? 127 : v; }
+
+std::vector<Event> cycleEvents(const Rhythm& r, const Feel& f) {
     std::vector<Event> ev;
-    for (size_t l = 0; l < r.layers.size(); ++l)
-        for (int i = 0; i < r.length; ++i) {
-            const int lv = r.layers[l][(size_t)i];
-            if (!lv) continue;
-            ev.push_back({r.tickOf(i) + swingDelay(r, i, swing), (int)l, i, lv, velocityOf(lv), kStaccato});
+    const int C = r.cycleTicks;
+    for (size_t l = 0; l < r.layers.size(); ++l) {
+        std::vector<int> steps, ticks;
+        for (int i = 0; i < r.length; ++i)
+            if (r.layers[l][(size_t)i]) { steps.push_back(i); ticks.push_back(r.tickOf(i) + swingDelay(r, i, f.swing)); }
+        const int m = (int)steps.size();
+        for (int j = 0; j < m; ++j) {
+            const int i = steps[(size_t)j], tick = ticks[(size_t)j];
+            const int jn = (j + 1) % m, jp = (j + m - 1) % m;
+            const bool wrap = j + 1 >= m;
+            const int nextTick = ticks[(size_t)jn] + (wrap ? C : 0);
+            const int prevTick = ticks[(size_t)jp] - (j == 0 ? C : 0);
+            const int jn2 = (jn + 1) % m;
+            const int nextNext = ticks[(size_t)jn2] + ((jn + 1 >= m) ? C : 0) + (wrap ? C : 0);
+            Event e{};
+            e.tick = tick; e.layer = (int)l; e.step = i; e.level = r.layers[l][(size_t)i];
+            e.gapNext = std::max(1, nextTick - tick);
+            e.gapPrev = std::max(1, tick - prevTick);
+            e.nextTick = nextTick; e.nextStep = steps[(size_t)jn]; e.nextWrap = wrap;
+            e.nextGapNext = std::max(1, nextNext - nextTick);
+            // velocity: level, then the dynamics distance, then the curve inside the bar
+            int v = velocityOf(e.level);
+            v = 90 + (v - 90) * f.dynamics / 50;
+            const int x = C > 0 ? (int)((long long)tick * 1000 / C) : 0;
+            const int dip = 4 * x * (1000 - x) / 1000;
+            v += f.curve * (-8 * dip + 6 * x) / 4000;
+            e.velocity = clampVel(v);
+            // length: staccato up to the next note, never into it
+            const int pctOwn = (l < r.lenPct.size() && (size_t)i < r.lenPct[l].size()) ? r.lenPct[l][(size_t)i] : -1;
+            const int pct = pctOwn >= 0 ? pctOwn : f.noteLength;
+            const int room = e.gapNext - 1;
+            int len = room > kStaccato ? kStaccato + (room - kStaccato) * std::max(0, std::min(100, pct)) / 100 : room;
+            e.length = std::max(1, len);
+            ev.push_back(e);
         }
+    }
     std::stable_sort(ev.begin(), ev.end(), [](const Event& a, const Event& b) {
         return a.tick != b.tick ? a.tick < b.tick : a.layer < b.layer;
     });
     return ev;
+}
+
+// random permille in [-1000, 1000] for one note in one cycle
+static int randPermille(int seed, int layer, int step, long long cycle, int salt) {
+    Rng g((uint64_t)(unsigned)seed * 0x100000001B3ull ^ ((uint64_t)(unsigned)layer << 40) ^ ((uint64_t)(unsigned)step << 20) ^
+          ((uint64_t)cycle * 0x9E3779B1ull) ^ ((uint64_t)salt << 56));
+    g.next();
+    return (int)(g.next() % 2001) - 1000;
+}
+static int timeOffset(int seed, int layer, int step, long long cycle, int timeRandom, int gapPrev, int gapNext) {
+    if (timeRandom <= 0) return 0;
+    const int bound = std::min(gapPrev, gapNext) / 3;                // the order of the notes never changes
+    const int reach = std::min(timeRandom * 3, bound);                // 10 moves a note by up to 30 ticks
+    return randPermille(seed, layer, step, cycle, 1) * reach / 1000;
+}
+
+Event shapeEvent(const Event& e, long long cycle, const Feel& f) {
+    Event o = e;
+    const int off = timeOffset(f.humanSeed, e.layer, e.step, cycle, f.timeRandom, e.gapPrev, e.gapNext);
+    o.tick = e.tick + off;
+    if (f.velRandom > 0) o.velocity = clampVel(e.velocity + randPermille(f.humanSeed, e.layer, e.step, cycle, 2) * (f.velRandom * 3) / 1000);
+    // the next note moves too: the length stops one tick before where it really starts
+    const int nextOff = timeOffset(f.humanSeed, e.layer, e.nextStep, cycle + (e.nextWrap ? 1 : 0), f.timeRandom, e.gapNext, e.nextGapNext);
+    const int room = e.nextTick + nextOff - o.tick - 1;
+    o.length = std::max(1, std::min(e.length, room));
+    return o;
 }
 
 // ---------- live
@@ -444,8 +524,8 @@ std::vector<int> arpNotes(int mode, const std::vector<int>& chord, int layer, in
         case amGate: out = chord; break;
         case amArpeggio: out.push_back(chord[(size_t)(((hitIndex % n) + n) % n)]); break;
         default: {
-            static const int rank[kMaxLayers] = {1, 0, 2, 3};      // C3 layer takes the second voice from the bottom
-            out.push_back(chord[(size_t)(rank[std::max(0, std::min(layer, kMaxLayers - 1))] % n)]);
+            // `layer` is the rank of the layer by its output note: the lowest layer plays the lowest voice
+            out.push_back(chord[(size_t)(std::max(0, std::min(layer, kMaxLayers - 1)) % n)]);
         }
     }
     return out;

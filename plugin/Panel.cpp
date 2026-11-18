@@ -1,4 +1,5 @@
 #include "Panel.h"
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -10,6 +11,7 @@ static juce::String noteName(int note) {
 // ---------------------------------------------------------------- pattern view
 void PatternView::paint(juce::Graphics& g) {
     labelRects.clear();
+    dots.clear();
     auto area = getLocalBounds().toFloat().reduced(6.0f);
     g.setColour(ui::panel);
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 10.0f);
@@ -47,7 +49,7 @@ void PatternView::paint(juce::Graphics& g) {
             g.drawText(U(r.layerNames[(size_t)l]), lab.reduced(8, 0).withHeight(lab.getHeight() * 0.55f), juce::Justification::bottomLeft);
             g.setColour(ui::textDim);
             g.setFont(ui::font(11.0f));
-            g.drawText(noteName(rhy::kLayerNote[l]) + "  (" + juce::String(rhy::kLayerNote[l]) + ")",
+            g.drawText(noteName(r.noteOf(l)) + "  (" + juce::String(r.noteOf(l)) + ")",
                        lab.reduced(8, 0).withTrimmedTop(lab.getHeight() * 0.55f), juce::Justification::topLeft);
             const float base = std::min(rowH * 0.40f, w / (float)r.length * 0.46f);
             for (int i = 0; i < r.length; ++i) {
@@ -57,6 +59,7 @@ void PatternView::paint(juce::Graphics& g) {
                 const float rad = lv == 3 ? base : lv == 2 ? base * 0.72f : base * 0.45f;
                 g.setColour(col.withAlpha(lv == 1 ? 0.55f : 1.0f));
                 g.fillEllipse(cx - rad, cy - rad, rad * 2, rad * 2);
+                markNote(g, l, i, cx, cy, rad);
             }
         }
         if (pos >= 0) {
@@ -86,6 +89,7 @@ void PatternView::paint(juce::Graphics& g) {
                 const float rad = lv == 3 ? base : lv == 2 ? base * 0.72f : base * 0.45f;
                 g.setColour(col.withAlpha(lv == 1 ? 0.55f : 1.0f));
                 g.fillEllipse(px - rad, py - rad, rad * 2, rad * 2);
+                markNote(g, l, i, px, py, rad);
             }
         }
         if (pos >= 0) {
@@ -96,9 +100,31 @@ void PatternView::paint(juce::Graphics& g) {
     }
 }
 
+// a ring round the selected hit, a short bar under a hit that has a length of its own; the dot is remembered for clicks
+void PatternView::markNote(juce::Graphics& g, int layer, int step, float cx, float cy, float rad) {
+    dots.push_back({layer, step, {cx, cy}, std::max(rad, 7.0f)});
+    if (layer == selLayer && step == selStep) {
+        g.setColour(ui::text);
+        g.drawEllipse(cx - rad - 3, cy - rad - 3, (rad + 3) * 2, (rad + 3) * 2, 1.5f);
+    }
+    if (proc.noteLenOf(layer, step) >= 0) {
+        g.setColour(ui::text.withAlpha(0.85f));
+        g.fillRect(cx - 4.0f, cy + rad + 3.0f, 8.0f, 2.0f);
+    }
+}
+
 void PatternView::mouseDown(const juce::MouseEvent& e) {
     for (size_t i = 0; i < labelRects.size(); ++i)
-        if (labelRects[i].contains(e.position) && onLayerClick) onLayerClick((int)i);
+        if (labelRects[i].contains(e.position)) { if (onLayerClick) onLayerClick((int)i); return; }
+    for (const auto& d : dots)
+        if (d.c.getDistanceFrom(e.position) <= d.r + 2.0f) {
+            const bool same = d.layer == selLayer && d.step == selStep;
+            selLayer = same ? -1 : d.layer;
+            selStep = same ? -1 : d.step;
+            if (onNoteSelected) onNoteSelected(selLayer, selStep);
+            repaint();
+            return;
+        }
 }
 
 // ---------------------------------------------------------------- card
@@ -166,7 +192,7 @@ RhythmPanel::RhythmPanel(RhythmBase& p) : view(p), proc(p) {
         "Евклидов ритм: k ударов равномерно на n шагов.",
         "Полиритм a:b. Слои на разных октавах.",
         "Полиметр: один пульс, два размера, акценты совпадают через НОК.",
-        "Случайный ритм по зерну. То же зерно даёт тот же ритм.",
+        "Случайный ритм. Кнопки «Назад» и «Вперёд» листают варианты, предыдущие 100 вариантов помнятся.",
         "Тихай: фраза трижды с паузами, последний удар третьей фразы ровно на первой доле следующего цикла (приём индийской музыки).",
         "Взять ритм первого такта из MIDI-файла."};
     for (int i = 0; i < 7; ++i) {
@@ -181,7 +207,7 @@ RhythmPanel::RhythmPanel(RhythmBase& p) : view(p), proc(p) {
     search.setFont(ui::font(13.5f));
     search.onTextChange = [this]() { refreshCatalog(); };
     addChildComponent(search);
-    category.addItem(U("Все категории"), 1);
+    category.addItem(U("Все категории"), 1);   // the list below is split by category, this narrows it to one
     {
         std::set<int> cats;
         for (const auto& e : rhy::catalog()) cats.insert(e.category);
@@ -206,18 +232,29 @@ RhythmPanel::RhythmPanel(RhythmBase& p) : view(p), proc(p) {
     resultant.setTooltip(U("Третий слой: удары обоих слоёв вместе"));
     resultantAtt = std::make_unique<juce::ButtonParameterAttachment>(*proc.params.getParameter("resultant"), resultant);
     addChildComponent(resultant);
-    addRow(rSteps, "Шагов", "randSteps");
-    addRow(rDens, "Плотность, %", "randDensity");
-    addRow(rSeed, "Зерно", "seed", U("Число, из которого строится ритм. Сохраняется в проекте."));
-    randKind.addItemList({U("Евклидов"), U("Группы 2-3-4"), U("По весу долей"), U("Ожерелья")}, 1);
+    addRow(rSteps, "Шаги", "randSteps");
+    addRow(rDens, "Плотность", "randDensity", U("Сколько шагов цикла занято ударами"));
+    randKind.addItemList({U("Евклидов"), U("Группы 2-3-4"), U("По сильным долям"), U("Разные рисунки")}, 1);
+    randKind.setTooltip(U("Евклидов: удары разложены ровно. Группы 2-3-4: цикл собран из групп по 2, 3 и 4 шага. "
+                          "По сильным долям: удары чаще попадают на сильные доли такта, получается похоже на грув. "
+                          "Разные рисунки: каждый вариант это новый рисунок с тем же числом ударов, повернутые копии друг друга не повторяются."));
     randKindAtt = std::make_unique<juce::ComboBoxParameterAttachment>(*proc.params.getParameter("randKind"), randKind);
     addChildComponent(randKind);
-    newSeed.setButtonText(U("Новое зерно"));
-    newSeed.getProperties().set("icon", "refresh");
-    newSeed.onClick = [this]() { proc.setParamValue("seed", (float)(1 + juce::Random::getSystemRandom().nextInt(99999))); };
-    addChildComponent(newSeed);
-    addRow(tLen, "Цикл, шагов", "tihaiLen");
-    addRow(tPhrase, "Фраза, шагов", "tihaiPhrase");
+    prevVar.setButtonText(U("Назад"));
+    prevVar.getProperties().set("icon", "prev");
+    prevVar.setTooltip(U("Предыдущий вариант"));
+    prevVar.onClick = [this]() { proc.stepVariant(-1); };
+    nextVar.setButtonText(U("Вперёд"));
+    nextVar.getProperties().set("icon", "next");
+    nextVar.setTooltip(U("Следующий вариант. В конце истории строится новый."));
+    nextVar.onClick = [this]() { proc.stepVariant(1); };
+    addChildComponent(prevVar);
+    addChildComponent(nextVar);
+    variantLabel.setFont(ui::font(13.0f, true));
+    variantLabel.setColour(juce::Label::textColourId, ui::text);
+    addChildComponent(variantLabel);
+    addRow(tLen, "Цикл", "tihaiLen", U("Длина цикла в шагах"));
+    addRow(tPhrase, "Паттерн", "tihaiPhrase", U("Длина фразы в шагах"));
     openFile.setButtonText(U("Открыть MIDI"));
     openFile.getProperties().set("icon", "open");
     openFile.onClick = [this]() { openMidi(); };
@@ -237,15 +274,47 @@ RhythmPanel::RhythmPanel(RhythmBase& p) : view(p), proc(p) {
     addRow(density, "Плотность", "density", U("Меньше нуля: убрать самые слабые удары. Больше: добавить на сильные места."));
     addRow(accentShift, "Сдвиг акцента", "accentShift", U("Удары остаются, уровни акцентов едут по ним"));
     addRow(phase, "Фаза, копия", "phase", U("Копия слоя со сдвигом на столько шагов (фазовый сдвиг Райха)"));
-    addRow(swing, "Свинг, %", "swing", U("Нечётные шаги звучат позже. Записывается в MIDI."));
-    retro.setButtonText(U("Раком")); retro.setTooltip(U("Ритм задом наперёд"));
+    retro.setButtonText(U("Реверс")); retro.setTooltip(U("Ритм задом наперёд"));
     invert.setButtonText(U("Дополнение")); invert.setTooltip(U("Паузы становятся ударами и наоборот"));
     retroAtt = std::make_unique<juce::ButtonParameterAttachment>(*proc.params.getParameter("retro"), retro);
     invertAtt = std::make_unique<juce::ButtonParameterAttachment>(*proc.params.getParameter("invert"), invert);
     augment.addItemList({U("Сетка как есть"), U("Увеличение x2"), U("Уменьшение /2")}, 1);
     augmentAtt = std::make_unique<juce::ComboBoxParameterAttachment>(*proc.params.getParameter("augment"), augment);
     for (auto* c : std::initializer_list<juce::Component*>{&retro, &invert, &augment}) addAndMakeVisible(c);
-    for (auto* r : {&rotate, &density, &accentShift, &phase, &swing}) { r->label.setVisible(true); r->slider.setVisible(true); }
+    RhythmLook::sectionLabel(exprHead, U("Выразительность"));
+    addAndMakeVisible(exprHead);
+    addRow(swing, "Свинг, %", "swing", U("Нечётные шаги звучат позже. Записывается в MIDI."));
+    addRow(noteLength, "Длина нот", "noteLength", U("0: короткие ноты (стаккато). 100: нота тянется до начала следующей, но не заходит на неё. Записывается в MIDI."));
+    addRow(dynamics, "Динамика", "dynamics", U("Расстояние между акцентом и тихой нотой. 50: как было, 0: все ноты ровные, 100: вдвое шире. Записывается в MIDI."));
+    addRow(curve, "Кривая такта", "curve", U("Громкость внутри такта: сильный первый удар, небольшой спад, к концу рост. 0: выключено."));
+    addRow(velRandom, "Разброс velocity", "velRandom", U("0: громкость как задано. 10: сильный случайный разброс для живости. Записывается в MIDI."));
+    addRow(timeRandom, "Разброс начала", "timeRandom", U("0: точно по сетке. 10: заметная живость. Ноты не меняются местами и не наезжают друг на друга. Записывается в MIDI."));
+    rerollHuman.setButtonText(U("Другой разброс"));
+    rerollHuman.getProperties().set("icon", "refresh");
+    rerollHuman.setTooltip(U("Выпадают другие случайные числа для разброса начала и громкости"));
+    rerollHuman.onClick = [this]() { proc.rerollHumanSeed(); };
+    addAndMakeVisible(rerollHuman);
+    noteInfo.setFont(ui::font(12.0f));
+    noteInfo.setColour(juce::Label::textColourId, ui::textDim);
+    addAndMakeVisible(noteInfo);
+    noteSlider.label.setText(U("Длина ноты"), juce::dontSendNotification);
+    noteSlider.label.setFont(ui::font(12.5f));
+    noteSlider.label.setColour(juce::Label::textColourId, ui::textDim);
+    noteSlider.slider.setSliderStyle(juce::Slider::LinearHorizontal);
+    noteSlider.slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 44, 22);
+    noteSlider.slider.setRange(0, 100, 1);
+    noteSlider.slider.setTooltip(U("Длина выбранной ноты. Нота не заходит на начало следующей."));
+    noteSlider.slider.onValueChange = [this]() {
+        if (!syncingNote_ && view.selLayer >= 0) proc.setNoteLen(view.selLayer, view.selStep, (int)std::lround(noteSlider.slider.getValue()));
+    };
+    addAndMakeVisible(noteSlider.label);
+    addAndMakeVisible(noteSlider.slider);
+    resetNote.setButtonText(U("Общая длина"));
+    resetNote.setTooltip(U("Вернуть выбранной ноте общую длину"));
+    resetNote.onClick = [this]() { if (view.selLayer >= 0) proc.setNoteLen(view.selLayer, view.selStep, -1); };
+    addAndMakeVisible(resetNote);
+    view.onNoteSelected = [this](int l, int st) { selectNote(l, st); };
+    for (auto* r : {&rotate, &density, &accentShift, &phase, &swing, &noteLength, &dynamics, &curve, &velRandom, &timeRandom}) { r->label.setVisible(true); r->slider.setVisible(true); }
     RhythmLook::sectionLabel(srcHead, U("Источник"));
     addAndMakeVisible(srcHead);
     titleLabel.setFont(ui::font(18.0f, true));
@@ -292,32 +361,58 @@ void RhythmPanel::openMidi() {
     });
 }
 
+void RhythmPanel::syncCatalogSelection() {
+    const int id = (int)std::lround(proc.params.getRawParameterValue("catalog")->load());
+    int row = -1;
+    for (int i = 0; i < (int)shown_.size(); ++i) if (shown_[(size_t)i].e && shown_[(size_t)i].e->id == id) row = i;
+    syncing_ = true;
+    if (row >= 0) list.selectRow(row, true, true); else list.deselectAllRows();
+    syncing_ = false;
+}
+
 void RhythmPanel::refreshCatalog() {
     shown_.clear();
     const int cat = category.getSelectedId() > 1 ? category.getSelectedId() - 100 : 0;
     const auto q = search.getText().trim();
+    std::vector<const rhy::CatalogEntry*> match;
     for (const auto& e : rhy::catalog()) {
         if (cat && e.category != cat) continue;
         if (q.isNotEmpty() && !(U(e.name).containsIgnoreCase(q) || U(e.region).containsIgnoreCase(q) || U(e.grouping).containsIgnoreCase(q))) continue;
-        shown_.push_back(&e);
+        match.push_back(&e);
+    }
+    std::stable_sort(match.begin(), match.end(), [](const rhy::CatalogEntry* a, const rhy::CatalogEntry* b) { return a->category < b->category; });
+    for (size_t i = 0; i < match.size();) {
+        size_t j = i;
+        while (j < match.size() && match[j]->category == match[i]->category) ++j;
+        shown_.push_back({nullptr, match[i]->category, (int)(j - i)});      // category header
+        for (size_t k = i; k < j; ++k) shown_.push_back({match[k], 0, 0});
+        i = j;
     }
     syncing_ = true;
     list.updateContent();
-    const int id = (int)std::lround(proc.params.getRawParameterValue("catalog")->load());
-    int row = -1;
-    for (int i = 0; i < (int)shown_.size(); ++i) if (shown_[(size_t)i]->id == id) row = i;
-    if (row >= 0) list.selectRow(row, true, true); else list.deselectAllRows();
     syncing_ = false;
+    syncCatalogSelection();
     list.repaint();
 }
 
 void RhythmPanel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, bool selected) {
     if (row < 0 || row >= (int)shown_.size()) return;
-    const auto* e = shown_[(size_t)row];
+    const auto& r = shown_[(size_t)row];
+    if (!r.e) {
+        g.setColour(ui::panelHi);
+        g.fillRect(0, 0, w, h);
+        g.setColour(ui::accent);
+        g.setFont(ui::font(11.5f, true));
+        g.drawText(U(rhy::categoryName(r.header)).toUpperCase(), 10, 0, w - 60, h, juce::Justification::centredLeft, true);
+        g.setColour(ui::textDim);
+        g.drawText(juce::String(r.count), w - 52, 0, 44, h, juce::Justification::centredRight);
+        return;
+    }
+    const auto* e = r.e;
     if (selected) { g.setColour(ui::accent.withAlpha(0.18f)); g.fillRect(0, 0, w, h); g.setColour(ui::accent); g.fillRect(0, 3, 3, h - 6); }
     g.setColour(selected ? ui::text : ui::text.withAlpha(0.88f));
     g.setFont(ui::font(13.0f));
-    g.drawText(U(e->name), 10, 0, w - 70, h, juce::Justification::centredLeft, true);
+    g.drawText(U(e->name), 16, 0, w - 76, h, juce::Justification::centredLeft, true);
     g.setColour(ui::textDim);
     g.setFont(ui::font(11.5f));
     g.drawText(juce::String((int)std::string(e->pattern).size()), w - 52, 0, 44, h, juce::Justification::centredRight);
@@ -325,11 +420,39 @@ void RhythmPanel::paintListBoxItem(int row, juce::Graphics& g, int w, int h, boo
 
 void RhythmPanel::selectedRowsChanged(int row) {
     if (syncing_ || row < 0 || row >= (int)shown_.size()) return;
-    proc.setParamValue("catalog", (float)shown_[(size_t)row]->id);
+    if (!shown_[(size_t)row].e) { syncCatalogSelection(); return; }       // a header is not a rhythm
+    proc.setParamValue("catalog", (float)shown_[(size_t)row].e->id);
     proc.setParamValue("source", (float)rhy::sCatalog);
 }
 void RhythmPanel::listBoxItemClicked(int row, const juce::MouseEvent&) {
-    if (row >= 0 && row < (int)shown_.size()) selectedRowsChanged(row);
+    if (row >= 0 && row < (int)shown_.size() && shown_[(size_t)row].e) selectedRowsChanged(row);
+}
+
+void RhythmPanel::selectNote(int layer, int step) {
+    view.selLayer = layer;
+    view.selStep = step;
+    updateNoteControls();
+    view.repaint();
+}
+
+void RhythmPanel::updateNoteControls() {
+    const auto& r = proc.rhythm();
+    bool valid = view.selLayer >= 0 && r.ok() && view.selLayer < (int)r.layers.size() && view.selStep >= 0 && view.selStep < r.length &&
+                 r.layers[(size_t)view.selLayer][(size_t)view.selStep] > 0;
+    if (!valid && view.selLayer >= 0) { view.selLayer = view.selStep = -1; }
+    noteSlider.slider.setEnabled(valid);
+    resetNote.setEnabled(valid && proc.noteLenOf(view.selLayer, view.selStep) >= 0);
+    if (!valid) {
+        noteInfo.setText(U("Нота не выбрана. Нажмите на удар в рисунке."), juce::dontSendNotification);
+        return;
+    }
+    const int own = proc.noteLenOf(view.selLayer, view.selStep);
+    const int shownValue = own >= 0 ? own : (int)std::lround(proc.params.getRawParameterValue("noteLength")->load());
+    noteInfo.setText(U("Слой ") + juce::String(view.selLayer + 1) + U(", шаг ") + juce::String(view.selStep + 1) + (own >= 0 ? U(", своя длина") : U(", общая длина")),
+                     juce::dontSendNotification);
+    syncingNote_ = true;
+    noteSlider.slider.setValue(shownValue, juce::dontSendNotification);
+    syncingNote_ = false;
 }
 
 void RhythmPanel::showSource() {
@@ -342,7 +465,7 @@ void RhythmPanel::showSource() {
     vis({&eK.label, &eK.slider, &eN.label, &eN.slider, &eRot.label, &eRot.slider}, s == rhy::sEuclid);
     vis({&pA.label, &pA.slider, &pB.label, &pB.slider}, s == rhy::sPoly || s == rhy::sPolymeter);
     vis({&resultant, &pBeats.label, &pBeats.slider}, s == rhy::sPoly);
-    vis({&rSteps.label, &rSteps.slider, &rDens.label, &rDens.slider, &rSeed.label, &rSeed.slider, &randKind, &newSeed}, s == rhy::sRandom);
+    vis({&rSteps.label, &rSteps.slider, &rDens.label, &rDens.slider, &randKind, &prevVar, &nextVar, &variantLabel}, s == rhy::sRandom);
     vis({&tLen.label, &tLen.slider, &tPhrase.label, &tPhrase.slider}, s == rhy::sTihai);
     vis({&openFile, &fileName, &srcHint}, s == rhy::sImported);
     resized();
@@ -355,6 +478,12 @@ void RhythmPanel::timerCallback() {
         const int id = (int)std::lround(proc.params.getRawParameterValue("catalog")->load());
         if (id != lastShownCatalog_) { lastShownCatalog_ = id; refreshCatalog(); }
     }
+    if (s == rhy::sRandom) {
+        const int n = std::max(1, proc.variantCount()), k = proc.variantCount() ? proc.variantNumber() : 1;
+        variantLabel.setText(U("Вариант ") + juce::String(k) + U(" из ") + juce::String(n), juce::dontSendNotification);
+        prevVar.setEnabled(proc.canGoBack());
+    }
+    updateNoteControls();
     const auto& r = proc.rhythm();
     titleLabel.setText(r.ok() ? U(r.name) : U("Нет ритма"), juce::dontSendNotification);
     juce::String info;
@@ -390,8 +519,12 @@ void RhythmPanel::resized() {
     else if (s == rhy::sPoly) { row(pA); row(pB); row(pBeats); resultant.setBounds(left.removeFromTop(28)); }
     else if (s == rhy::sPolymeter) { row(pA); row(pB); }
     else if (s == rhy::sRandom) {
-        row(rSeed);
-        newSeed.setBounds(left.removeFromTop(30).removeFromLeft(150)); left.removeFromTop(8);
+        variantLabel.setBounds(left.removeFromTop(24)); left.removeFromTop(2);
+        {
+            auto a = left.removeFromTop(30);
+            prevVar.setBounds(a.removeFromLeft(130)); a.removeFromLeft(8); nextVar.setBounds(a.removeFromLeft(130));
+        }
+        left.removeFromTop(10);
         row(rSteps); row(rDens);
         randKind.setBounds(left.removeFromTop(28));
     } else if (s == rhy::sTihai) { row(tLen); row(tPhrase); }
@@ -404,7 +537,7 @@ void RhythmPanel::resized() {
     // transformations
     transHead.setBounds(right.removeFromTop(20));
     right.removeFromTop(4);
-    auto trow = [&](Row& r) { auto a = right.removeFromTop(30); r.label.setBounds(a.removeFromLeft(96)); r.slider.setBounds(a); right.removeFromTop(4); };
+    auto trow = [&](Row& r) { auto a = right.removeFromTop(28); r.label.setBounds(a.removeFromLeft(110)); r.slider.setBounds(a); right.removeFromTop(2); };
     trow(rotate);
     {
         auto a = right.removeFromTop(28);
@@ -413,7 +546,16 @@ void RhythmPanel::resized() {
         right.removeFromTop(6);
     }
     augment.setBounds(right.removeFromTop(28)); right.removeFromTop(8);
-    trow(density); trow(accentShift); trow(phase); trow(swing);
+    trow(density); trow(accentShift); trow(phase);
+    right.removeFromTop(8);
+    exprHead.setBounds(right.removeFromTop(20));
+    right.removeFromTop(4);
+    trow(swing); trow(noteLength); trow(dynamics); trow(curve); trow(velRandom); trow(timeRandom);
+    rerollHuman.setBounds(right.removeFromTop(30).removeFromLeft(160));
+    right.removeFromTop(8);
+    noteInfo.setBounds(right.removeFromTop(20));
+    trow(noteSlider);
+    resetNote.setBounds(right.removeFromTop(30).removeFromLeft(160));
 
     // centre: title, picture, info
     titleLabel.setBounds(b.removeFromTop(28));

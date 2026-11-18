@@ -53,7 +53,7 @@ std::vector<unsigned char> writeMidi(const Rhythm& r, const MidiOptions& o) {
     std::vector<unsigned char> f;
     if (!r.ok()) return f;
     const int bars = std::max(1, std::min(o.bars, 64));
-    const auto cyc = cycleEvents(r, o.swing);
+    const auto cyc = cycleEvents(r, o.feel);
     const bool sep = o.separateTracks;
     const int ntracks = sep ? (int)r.layers.size() : 1;
     f.insert(f.end(), {'M', 'T', 'h', 'd'});
@@ -77,10 +77,11 @@ std::vector<unsigned char> writeMidi(const Rhythm& r, const MidiOptions& o) {
     for (int tr = 0; tr < ntracks; ++tr) {
         std::vector<Raw> ev;
         for (int b = 0; b < bars; ++b)
-            for (const auto& e : cyc) {
-                if (sep && e.layer != tr) continue;
-                const int note = sep ? kLayerNote[0] : kLayerNote[std::min(e.layer, kMaxLayers - 1)];
-                const long long t = (long long)b * r.cycleTicks + e.tick;
+            for (const auto& base : cyc) {
+                if (sep && base.layer != tr) continue;
+                const Event e = shapeEvent(base, b, o.feel);
+                const int note = sep ? kLayerNote[0] : r.noteOf(e.layer);
+                const long long t = std::max(0LL, (long long)b * r.cycleTicks + e.tick);
                 ev.push_back({t, 1, note, e.velocity});
                 ev.push_back({t + e.length, 0, note, 0});
             }

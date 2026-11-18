@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <algorithm>
 
 RhythmProcessor::RhythmProcessor()
     : RhythmBase(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true),
@@ -46,11 +47,13 @@ void RhythmProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::MidiBuff
             const double ticksPerSample = bpm * rhy::kTpb / (60.0 * sampleRate_);
             const double t0 = tick_, t1 = tick_ + ticksPerSample * n;
             const long long c0 = (long long)std::floor(t0 / lp->cycleTicks), c1 = (long long)std::floor(t1 / lp->cycleTicks);
-            for (long long c = c0; c <= c1; ++c)
-                for (const auto& e : lp->events) {
+            for (long long c = c0 - 1; c <= c1; ++c)             // one cycle back: a note can be moved earlier across the bar line
+                for (const auto& base : lp->events) {
+                    const auto e = rhy::shapeEvent(base, c, lp->feel);
                     const double abs = (double)c * lp->cycleTicks + e.tick;
                     if (abs >= t0 && abs < t1 && nh < 256) hits[nh++] = {(int)((abs - t0) / ticksPerSample), e.layer, e.velocity};
                 }
+            std::sort(hits, hits + nh, [](const Hit& a, const Hit& b) { return a.at < b.at; });
             tick_ = std::fmod(t1, 64.0 * lp->cycleTicks);
             previewTick_ = std::fmod(t1, (double)lp->cycleTicks);
         }

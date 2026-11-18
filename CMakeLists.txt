@@ -4,7 +4,7 @@ if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "")
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 endif()
-project(RhythmArranger VERSION 0.1.2 LANGUAGES C CXX)
+project(RhythmArranger VERSION 0.2.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -35,6 +35,7 @@ if(RHYTHM_BUILD_PLUGIN)
         FetchContent_MakeAvailable(juce)
     endif()
 
+    juce_add_binary_data(RhythmAssets SOURCES assets/teilormusic_logo.svg)
     set(RHYTHM_DEFS JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
 
     # Rhythm Arranger: instrument (Logic: Software Instrument -> AU Instruments -> Teilormusic)
@@ -57,7 +58,7 @@ if(RHYTHM_BUILD_PLUGIN)
         plugin/Base.cpp plugin/Panel.cpp plugin/PluginProcessor.cpp plugin/PluginEditor.cpp plugin/Look.cpp)
     target_compile_definitions(RhythmArranger PUBLIC ${RHYTHM_DEFS})
     target_link_libraries(RhythmArranger
-        PRIVATE rhythm_core juce::juce_audio_utils juce::juce_gui_extra
+        PRIVATE rhythm_core RhythmAssets juce::juce_audio_utils juce::juce_gui_extra
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags
                juce::juce_recommended_warning_flags)
 
@@ -81,7 +82,7 @@ if(RHYTHM_BUILD_PLUGIN)
         plugin/Base.cpp plugin/Panel.cpp plugin/LiveProcessor.cpp plugin/LiveEditor.cpp plugin/Look.cpp)
     target_compile_definitions(RhythmArrangerLive PUBLIC ${RHYTHM_DEFS})
     target_link_libraries(RhythmArrangerLive
-        PRIVATE rhythm_core juce::juce_audio_utils juce::juce_gui_extra
+        PRIVATE rhythm_core RhythmAssets juce::juce_audio_utils juce::juce_gui_extra
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags
                juce::juce_recommended_warning_flags)
 endif()
@@ -97,6 +98,6 @@ if(RHYTHM_BUILD_PLUGIN AND RHYTHM_BUILD_TESTS)
     target_compile_definitions(RhythmPluginTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
         JucePlugin_Name="Rhythm Arranger" JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1
         RHYTHM_NO_PLUGIN_ENTRY=1)
-    target_link_libraries(RhythmPluginTests PRIVATE rhythm_core juce::juce_audio_utils juce::juce_gui_extra
+    target_link_libraries(RhythmPluginTests PRIVATE rhythm_core RhythmAssets juce::juce_audio_utils juce::juce_gui_extra
         juce::juce_recommended_config_flags)
 endif()

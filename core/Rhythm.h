@@ -11,9 +11,11 @@ constexpr int kTpb = 480;          // MIDI ticks per quarter
 constexpr int kStaccato = 60;      // note length in ticks, always short
 constexpr int kMaxLayers = 4;
 constexpr int kMaxLength = 512;    // longest cycle in steps
-// Output notes of the layers, in the order the layers are built: the first layer sits on C3 (60),
-// then C2, C4, C5. The editor shows this order next to the layers.
+// Output notes of the layers, in the order the layers are built. Ordinary rhythms: C3 (60), then C2, C4, C5.
+// Polyrhythm and polymeter: the first layer on C1 (36), the second on C3 (60), the resultant (Schillinger) on C2 (48).
+// The editor shows the note next to every layer.
 constexpr int kLayerNote[kMaxLayers] = {60, 48, 72, 84};
+constexpr int kPolyNote[kMaxLayers] = {36, 60, 48, 72};
 
 // accent levels: 0 rest, 1 soft, 2 normal, 3 accent; velocity 64 / 90 / 112
 using Pattern = std::vector<uint8_t>;
@@ -44,6 +46,12 @@ struct Rhythm {
     int meterNum = 4, meterDen = 4;
     std::vector<Pattern> layers;      // each has `length` entries
     std::vector<std::string> layerNames;
+    std::vector<int> notes;           // output note of every layer
+    std::vector<std::vector<int>> lenPct;   // note length per layer and step, percent, -1 = the general length
+    int noteOf(int layer) const {
+        if (layer >= 0 && layer < (int)notes.size()) return notes[(size_t)layer];
+        return kLayerNote[layer < 0 ? 0 : layer >= kMaxLayers ? kMaxLayers - 1 : layer];
+    }
     bool ok() const { return length > 0 && !layers.empty(); }
     int tickOf(int step) const { return (int)(((long long)step * cycleTicks + length / 2) / length); }
 };
@@ -86,6 +94,8 @@ struct Rng {
 enum Source { sCatalog, sEuclid, sPoly, sPolymeter, sRandom, sTihai, sImported, sNumSources };
 enum RandKind { rkEuclid, rkAdditive, rkWeighted, rkNecklace, rkNumKinds };
 
+struct NoteLen { int layer, step, pct; };      // a note of its own length
+
 struct Settings {
     int source = sCatalog;
     int catalogId = 1001;
@@ -104,7 +114,20 @@ struct Settings {
     int accentShift = 0;
     int phase = 0;                           // above 0 adds a copy rotated by this many steps (Reich)
     int swing = 0;                           // 0..50 percent of a step, odd steps come later
+    // expression, applied when the notes are written or played
+    int noteLength = 0;                      // 0 staccato (60 ticks) .. 100 up to the next note
+    int dynamics = 50;                       // 0 flat, 50 as it was, 100 twice the distance between accent and ghost
+    int curve = 0;                           // 0..10, dynamic curve inside the bar
+    int velRandom = 0, timeRandom = 0;       // 0..10, 0 leaves the values alone
+    int humanSeed = 1;
+    std::vector<NoteLen> noteLens;
 };
+
+struct Feel {
+    int swing = 0, noteLength = 0, dynamics = 50, curve = 0, velRandom = 0, timeRandom = 0, humanSeed = 1;
+};
+Feel feelOf(const Settings& s);
+std::string euclidName(int k, int n);
 
 Rhythm build(const Settings& s, const Rhythm* imported = nullptr);
 Rhythm polyrhythm(int a, int b, bool resultant, int beats);
@@ -115,11 +138,16 @@ Rhythm foldLayers(const Rhythm& r, int maxLayers);
 
 // ---------- events
 struct Event {
-    int tick;       // inside the cycle
+    int tick;       // inside the cycle, swing included
     int layer, step, level, velocity, length;
+    int gapPrev, gapNext, nextTick, nextStep, nextGapNext;   // neighbours on the same layer
+    bool nextWrap;                                           // the next note is in the next cycle
 };
-// one cycle of events, sorted by tick then layer; swing is written into the ticks
-std::vector<Event> cycleEvents(const Rhythm& r, int swingPercent);
+// one cycle of events, sorted by tick then layer. Swing, dynamics, curve and length are in; the random parts are not.
+std::vector<Event> cycleEvents(const Rhythm& r, const Feel& f);
+// the random part for cycle number `cycle`: the start moves, the velocity moves, the length follows so that
+// a note never reaches the start of the next one. Integer arithmetic, same result everywhere.
+Event shapeEvent(const Event& e, long long cycle, const Feel& f);
 int swingDelay(const Rhythm& r, int step, int swingPercent);
 
 // ---------- MIDI
@@ -127,7 +155,7 @@ struct MidiOptions {
     int bars = 4;                  // cycles written
     double bpm = 120;
     bool separateTracks = false;   // one track per layer, every layer on C3
-    int swing = 0;
+    Feel feel;
 };
 std::vector<unsigned char> writeMidi(const Rhythm& r, const MidiOptions& o);
 struct SourceNote { int tick, note, velocity; };
@@ -138,7 +166,8 @@ Rhythm rhythmFromNotes(const std::vector<SourceNote>& notes, int num, int den, c
 
 // ---------- live arpeggiator
 enum ArpMode { amGate, amArpeggio, amVoiceSplit, amNumModes };
-// chord: sorted held notes; hitIndex counts hits since the chord changed; returns the notes to play
+// chord: sorted held notes; hitIndex counts hits since the chord changed; for the voice split `layer` is the rank of
+// the layer among the layer notes (0 = lowest). Returns the notes to play
 std::vector<int> arpNotes(int mode, const std::vector<int>& chord, int layer, int hitIndex);
 
 }  // namespace rhy

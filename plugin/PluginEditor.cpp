@@ -1,7 +1,9 @@
 #include "PluginEditor.h"
+#include "Logo.h"
 
 RhythmEditor::RhythmEditor(RhythmProcessor& p)
     : AudioProcessorEditor(&p), panel(p), proc(p), cardMix(p), cardLayers(p) {
+    logo = makeLogo();
     setLookAndFeel(&look);
     addAndMakeVisible(panel);
     panel.view.position = [this]() { return proc.isPreviewing() ? proc.previewPositionTicks() : -1.0; };
@@ -40,7 +42,7 @@ RhythmEditor::RhythmEditor(RhythmProcessor& p)
     bars.setTooltip(U("Сколько раз цикл повторяется в перетаскиваемом файле"));
 
     cardMix.title = U("Ритм в трек");
-    cardLayers.title = U("Слои по трекам");
+    cardLayers.title = U("Экспорт слоев по трэкам");
     cardMix.makeFile = [this]() { return proc.writeRhythmFile((int)std::lround(proc.params.getRawParameterValue("bars")->load()), false); };
     cardLayers.makeFile = [this]() { return proc.writeRhythmFile((int)std::lround(proc.params.getRawParameterValue("bars")->load()), true); };
     cardLayers.showLayers = false;
@@ -49,7 +51,7 @@ RhythmEditor::RhythmEditor(RhythmProcessor& p)
     addAndMakeVisible(cardMix);
     addAndMakeVisible(cardLayers);
 
-    setSize(1100, 720);
+    setSize(1100, 820);
     startTimerHz(10);
     timerCallback();
 }
@@ -71,9 +73,7 @@ void RhythmEditor::paint(juce::Graphics& g) {
     g.setColour(ui::text);
     g.setFont(ui::font(13.0f, true));
     g.drawText("RHYTHM ARRANGER", 24, 12, 260, 22, juce::Justification::centredLeft);
-    g.setColour(ui::textDim);
-    g.setFont(ui::font(12.0f));
-    g.drawText("Teilormusic", getWidth() - 24 - 200, 12, 200, 22, juce::Justification::centredRight);
+    drawLogo(g, logo.get(), juce::Rectangle<float>((float)getWidth() - 24.0f - 220.0f, 14.0f, 220.0f, 18.0f));
     g.setColour(ui::line);
     g.drawHorizontalLine(getHeight() - 150, 24, (float)getWidth() - 24);
 }
@@ -94,7 +94,7 @@ void RhythmEditor::resized() {
     auto r2 = left.removeFromTop(28);
     barsLabel.setBounds(r2.removeFromLeft(110)); bars.setBounds(r2);
     bottom.removeFromLeft(24);
-    auto cards = bottom.removeFromLeft(560);
+    auto cards = bottom.removeFromLeft(620);
     cardMix.setBounds(cards.removeFromLeft(320).reduced(0, 2));
     cards.removeFromLeft(14);
     cardLayers.setBounds(cards.reduced(0, 2));
