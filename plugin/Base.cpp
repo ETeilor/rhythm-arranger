@@ -166,22 +166,39 @@ juce::File RhythmBase::writeRhythmFile(int bars, bool separateTracks) const {
     return writeTempFile(rhy::writeMidi(rhythm_, o), name);
 }
 
+RhythmBase::Variant RhythmBase::currentVariant() const {
+    auto i = [&](const char* id) { return (int)std::lround(params.getRawParameterValue(id)->load()); };
+    Variant v;
+    v.seed = i("seed"); v.steps = i("randSteps"); v.density = i("randDensity"); v.kind = i("randKind");
+    return v;
+}
+
+void RhythmBase::applyVariant(const Variant& v) {
+    setParamValue("seed", (float)v.seed);
+    setParamValue("randSteps", (float)v.steps);
+    setParamValue("randDensity", (float)v.density);
+    setParamValue("randKind", (float)v.kind);
+}
+
+// A variant remembers the seed and every slider of the random tab. Leaving a variant stores what the sliders show now,
+// so going back returns exactly the rhythm and the slider positions it had. Ten are kept.
 void RhythmBase::stepVariant(int dir) {
-    if (variants_.empty()) { variants_.push_back((int)std::lround(params.getRawParameterValue("seed")->load())); varPos_ = 0; }
+    if (variants_.empty()) { variants_.push_back(currentVariant()); varPos_ = 0; }
+    variants_[(size_t)varPos_] = currentVariant();
     if (dir < 0) {
         if (varPos_ <= 0) return;
         --varPos_;
     } else if (varPos_ + 1 < (int)variants_.size()) {
         ++varPos_;
     } else {
-        const int cur = variants_[(size_t)varPos_];
-        int v = cur;
-        while (v == cur) v = 1 + juce::Random::getSystemRandom().nextInt(99999);
+        Variant v = variants_[(size_t)varPos_];       // the new variant starts from the same sliders with a new seed
+        const int cur = v.seed;
+        while (v.seed == cur) v.seed = 1 + juce::Random::getSystemRandom().nextInt(99999);
         variants_.push_back(v);
-        if (variants_.size() > 100) variants_.erase(variants_.begin());
+        if ((int)variants_.size() > kMaxVariants) variants_.erase(variants_.begin());
         varPos_ = (int)variants_.size() - 1;
     }
-    setParamValue("seed", (float)variants_[(size_t)varPos_]);
+    applyVariant(variants_[(size_t)varPos_]);
 }
 
 void RhythmBase::rerollHumanSeed() {
@@ -230,8 +247,9 @@ void RhythmBase::getStateInformation(juce::MemoryBlock& dest) {
         nl->setAttribute("sig", juce::String((juce::int64)lensSig_));
     }
     if (!variants_.empty()) {
+        if (varPos_ >= 0) variants_[(size_t)varPos_] = currentVariant();
         juce::StringArray a;
-        for (int v : variants_) a.add(juce::String(v));
+        for (const auto& v : variants_) a.add(juce::String(v.seed) + ":" + juce::String(v.steps) + ":" + juce::String(v.density) + ":" + juce::String(v.kind));
         auto* vr = xml->createNewChildElement("Variants");
         vr->setAttribute("list", a.joinIntoString(","));
         vr->setAttribute("pos", varPos_);
@@ -262,8 +280,15 @@ void RhythmBase::setStateInformation(const void* data, int size) {
     if (auto* st = xml->getChildByName(params.state.getType())) params.replaceState(juce::ValueTree::fromXml(*st));
     variants_.clear(); varPos_ = -1;
     if (auto* vr = xml->getChildByName("Variants")) {
-        for (auto& t : juce::StringArray::fromTokens(vr->getStringAttribute("list"), ",", "")) if (t.getIntValue() > 0) variants_.push_back(t.getIntValue());
-        varPos_ = std::min(vr->getIntAttribute("pos", 0), (int)variants_.size() - 1);
+        for (auto& t : juce::StringArray::fromTokens(vr->getStringAttribute("list"), ",", "")) {
+            auto f = juce::StringArray::fromTokens(t, ":", "");
+            Variant v = currentVariant();                 // an old project holds only the seed
+            if (f.size() >= 1 && f[0].getIntValue() > 0) v.seed = f[0].getIntValue(); else continue;
+            if (f.size() == 4) { v.steps = f[1].getIntValue(); v.density = f[2].getIntValue(); v.kind = f[3].getIntValue(); }
+            variants_.push_back(v);
+        }
+        while ((int)variants_.size() > kMaxVariants) variants_.erase(variants_.begin());
+        varPos_ = std::max(0, std::min(vr->getIntAttribute("pos", 0), (int)variants_.size() - 1));
         if (variants_.empty()) varPos_ = -1;
     }
     noteLens_.clear();

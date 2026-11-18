@@ -386,29 +386,40 @@ int main(int argc, char** argv) {
             expect(p.recordedNotes() == 0 && !p.writeRecordingFile().existsAsFile(), "очистка записи");
         }
     }
-    // 5b. variants, notes of their own length, randomizers in the file, state
+    // 5b. variants: each one keeps the seed and the sliders of the random tab, ten are remembered
     {
         RhythmProcessor p;
-        set(p.params, "source", 4); set(p.params, "seed", 7);
+        auto val = [&](const char* id) { return (int)std::lround(p.params.getRawParameterValue(id)->load()); };
+        set(p.params, "source", 4); set(p.params, "seed", 7); set(p.params, "randSteps", 12); set(p.params, "randDensity", 50); set(p.params, "randKind", 0);
         p.rebuild();
         const auto first = p.rhythm().layers[0];
         expect(!p.canGoBack(), "варианты: назад нельзя, пока истории нет");
-        std::vector<int> seeds;
-        seeds.push_back((int)std::lround(p.params.getRawParameterValue("seed")->load()));
-        for (int i = 0; i < 12; ++i) { p.stepVariant(1); pump(20); seeds.push_back((int)std::lround(p.params.getRawParameterValue("seed")->load())); }
-        std::set<int> distinct(seeds.begin(), seeds.end());
-        expect(p.variantCount() == 13 && p.variantNumber() == 13 && distinct.size() == seeds.size(), "варианты: двенадцать новых, все разные");
-        for (int i = 0; i < 10; ++i) { p.stepVariant(-1); pump(20); }
-        expect(p.variantNumber() == 3 && (int)std::lround(p.params.getRawParameterValue("seed")->load()) == seeds[2], "варианты: десять шагов назад возвращают тот же вариант");
+        p.stepVariant(1); pump(20);                                  // second variant: other seed, same sliders
+        expect(p.variantNumber() == 2 && val("seed") != 7 && val("randSteps") == 12 && val("randDensity") == 50, "вперёд: новый вариант с теми же ползунками");
+        set(p.params, "randSteps", 20); set(p.params, "randDensity", 70); set(p.params, "randKind", 2);   // the user sets other values
+        p.rebuild();
+        const auto second = p.rhythm().layers[0];
+        const int seed2 = val("seed");
+        p.stepVariant(-1); pump(20);
+        expect(p.variantNumber() == 1 && val("seed") == 7 && val("randSteps") == 12 && val("randDensity") == 50 && val("randKind") == 0, "назад: ползунки вернулись на значения первого варианта");
+        p.rebuild();
+        expect(p.rhythm().layers[0] == first, "назад: вернулся тот же рисунок");
+        p.stepVariant(1); pump(20);
+        p.rebuild();
+        expect(val("seed") == seed2 && val("randSteps") == 20 && val("randDensity") == 70 && val("randKind") == 2 && p.rhythm().layers[0] == second, "вперёд по истории: второй вариант со своими ползунками");
+        // ten are kept, the oldest falls out
+        for (int i = 0; i < 14; ++i) { p.stepVariant(1); pump(10); }
+        expect(p.variantCount() == 10 && p.variantNumber() == 10, "в памяти десять вариантов");
+        for (int i = 0; i < 20; ++i) { p.stepVariant(-1); pump(10); }
+        expect(p.variantNumber() == 1 && !p.canGoBack(), "назад до самого раннего из десяти");
+        // state
+        p.stepVariant(1); pump(10);
+        set(p.params, "randSteps", 9);
         juce::MemoryBlock st; p.getStateInformation(st);
         RhythmProcessor q; q.setStateInformation(st.getData(), (int)st.getSize());
-        expect(q.variantCount() == 13 && q.variantNumber() == 3, "варианты: история живёт в проекте");
-        for (int i = 0; i < 2; ++i) { p.stepVariant(-1); pump(20); }
-        expect(p.rhythm().layers[0] == first && !p.canGoBack(), "варианты: первый вариант вернулся как был");
-        p.stepVariant(1); pump(20);
-        p.stepVariant(-1); pump(20);
-        p.stepVariant(1); pump(20);
-        expect(p.variantNumber() == 2 && p.variantCount() == 13, "варианты: вперёд по истории не строит новый");
+        expect(q.variantCount() == 10 && q.variantNumber() == 2, "варианты живут в проекте");
+        q.stepVariant(-1); pump(20); q.stepVariant(1); pump(20);
+        expect((int)std::lround(q.params.getRawParameterValue("randSteps")->load()) == 9, "после загрузки проекта ползунки варианта на месте");
     }
     {
         RhythmProcessor p;

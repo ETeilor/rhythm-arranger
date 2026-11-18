@@ -192,7 +192,7 @@ RhythmPanel::RhythmPanel(RhythmBase& p) : view(p), proc(p) {
         "Евклидов ритм: k ударов равномерно на n шагов.",
         "Полиритм a:b. Слои на разных октавах.",
         "Полиметр: один пульс, два размера, акценты совпадают через НОК.",
-        "Случайный ритм. Кнопки «Назад» и «Вперёд» листают варианты, предыдущие 100 вариантов помнятся.",
+        "Случайный ритм. Кнопки «Назад» и «Вперёд» листают варианты, помнятся 10 вариантов вместе с положением ползунков.",
         "Тихай: фраза трижды с паузами, последний удар третьей фразы ровно на первой доле следующего цикла (приём индийской музыки).",
         "Взять ритм первого такта из MIDI-файла."};
     for (int i = 0; i < 7; ++i) {
@@ -242,11 +242,11 @@ RhythmPanel::RhythmPanel(RhythmBase& p) : view(p), proc(p) {
     addChildComponent(randKind);
     prevVar.setButtonText(U("Назад"));
     prevVar.getProperties().set("icon", "prev");
-    prevVar.setTooltip(U("Предыдущий вариант"));
+    prevVar.setTooltip(U("Предыдущий вариант: ползунки вернутся как были"));
     prevVar.onClick = [this]() { proc.stepVariant(-1); };
     nextVar.setButtonText(U("Вперёд"));
     nextVar.getProperties().set("icon", "next");
-    nextVar.setTooltip(U("Следующий вариант. В конце истории строится новый."));
+    nextVar.setTooltip(U("Следующий вариант. Текущий запоминается. В конце строится новый с тем же положением ползунков."));
     nextVar.onClick = [this]() { proc.stepVariant(1); };
     addChildComponent(prevVar);
     addChildComponent(nextVar);

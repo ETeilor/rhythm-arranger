@@ -79,8 +79,12 @@ private:
     rhy::Rhythm rhythm_, imported_;
     std::vector<rhy::NoteLen> noteLens_;
     unsigned lensSig_ = 0;
-    std::vector<int> variants_;
+    struct Variant { int seed = 1, steps = 16, density = 40, kind = 0; };   // everything the random tab sets
+    std::vector<Variant> variants_;
     int varPos_ = -1;
+    Variant currentVariant() const;
+    void applyVariant(const Variant&);
+    static constexpr int kMaxVariants = 10;
     juce::String importedName_;
     std::shared_ptr<const Loop> loop_;
     mutable int dragCounter_ = 0;
